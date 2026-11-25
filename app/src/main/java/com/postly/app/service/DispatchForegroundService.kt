@@ -46,8 +46,9 @@ class DispatchForegroundService : Service() {
                 return@launch
             }
 
-            // Assign pending task to Accessibility Service
+            // Assign pending task to Accessibility Service and reset state
             PostlyAccessibilityService.pendingTask = schedule
+            PostlyAccessibilityService.currentStep = AutomationStep.START
 
             val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
             val isLocked = keyguardManager.isKeyguardLocked
