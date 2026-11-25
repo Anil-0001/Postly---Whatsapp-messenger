@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Postly</string>
+    <string name="accessibility_service_description">Postly uses this service to automatically find selected contacts and send scheduled messages on WhatsApp on your behalf. No personal data, chats, or keystrokes are stored or transmitted.</string>
+</resources>
