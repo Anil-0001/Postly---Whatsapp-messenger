@@ -235,7 +235,102 @@ fun RequirementsScreen(
                 }
             }
 
-            // Card 5: Notifications
+            // Card 5: Mi / Xiaomi / Oppo / Vivo Background & Autostart Settings
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Mi / Xiaomi / Device Autostart",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Icon(
+                            imageVector = Icons.Outlined.Warning,
+                            contentDescription = "Device Settings",
+                            tint = WarningOrange,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "For Xiaomi / Redmi / POCO / Vivo / Oppo / Realme devices, the phone stops background apps unless you enable these 2 settings:\n\n" +
+                                "1. Autostart: Turn ON Autostart so Postly stays active in the background.\n" +
+                                "2. Other Permissions: Allow 'Display pop-up windows while running in the background' and 'Show on Lock screen'.\n" +
+                                "3. Battery Saver: Set to 'No restrictions'.",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        lineHeight = 18.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Button(
+                        onClick = {
+                            val intents = listOf(
+                                // Xiaomi / MIUI / HyperOS Autostart
+                                Intent().setComponent(android.content.ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")),
+                                // Oppo / Realme Autostart
+                                Intent().setComponent(android.content.ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")),
+                                Intent().setComponent(android.content.ComponentName("com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity")),
+                                // Vivo Autostart
+                                Intent().setComponent(android.content.ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")),
+                                // Fallback App Details
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:${context.packageName}") }
+                            )
+                            for (intent in intents) {
+                                try {
+                                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    context.startActivity(intent)
+                                    break
+                                } catch (e: Exception) {}
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("1. Open Autostart Settings", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Button(
+                        onClick = {
+                            try {
+                                // Xiaomi / MIUI Permissions Editor
+                                val miuiIntent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                                    setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+                                    putExtra("extra_pkgname", context.packageName)
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(miuiIntent)
+                            } catch (e: Exception) {
+                                val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(fallback)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandBlueLight),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("2. Open Pop-up & Lock Screen Permissions", color = BrandBlue, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    }
+                }
+            }
+
+            // Card 6: Notifications
             RequirementCard(
                 title = "Notifications",
                 isComplete = true,
