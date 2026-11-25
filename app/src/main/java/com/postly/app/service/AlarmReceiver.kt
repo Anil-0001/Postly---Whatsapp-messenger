@@ -25,14 +25,24 @@ class AlarmReceiver : BroadcastReceiver() {
 
         Log.d(TAG, "Alarm received for schedule: $scheduleId")
 
+        // Use goAsync to keep CPU awake while checking schedule and starting foreground service
+        val pendingResult = goAsync()
         val app = context.applicationContext as PostlyApplication
-        CoroutineScope(Dispatchers.IO).launch {
-            val schedule = app.database.scheduleDao().getScheduleById(scheduleId) ?: return@launch
 
-            if (schedule.askBeforeSending) {
-                showConfirmationNotification(context, schedule)
-            } else {
-                startDispatchService(context, schedule)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val schedule = app.database.scheduleDao().getScheduleById(scheduleId)
+                if (schedule != null) {
+                    if (schedule.askBeforeSending) {
+                        showConfirmationNotification(context, schedule)
+                    } else {
+                        startDispatchService(context, schedule)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in AlarmReceiver onReceive", e)
+            } finally {
+                pendingResult.finish()
             }
         }
     }

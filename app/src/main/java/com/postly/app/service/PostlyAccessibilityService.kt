@@ -204,17 +204,11 @@ class PostlyAccessibilityService : AccessibilityService() {
                                 clickAt(coords.first, coords.second)
                             }
                         }
-                        delay(220)
+                        delay(250)
                     }
 
-                    delay(350)
-                    // Press Enter if required on device
-                    val enterTapped = findAndClickNode(currentRoot, listOf("com.android.systemui:id/key_enter", "com.android.systemui:id/btn_enter", "OK", "Done", "Enter"))
-                    if (!enterTapped) {
-                        // Fallback enter coordinate for OnePlus keypad
-                        val enterCoords = Pair(width * 0.75f, height * 0.83f)
-                        clickAt(enterCoords.first, enterCoords.second)
-                    }
+                    // Note: On OnePlus OxygenOS 14, standard 4-digit/6-digit PIN auto-submits when the last digit is typed.
+                    // DO NOT tap any fallback enter coordinate as that clicks the backspace/delete button!
                 }
 
                 delay(1200)
@@ -231,15 +225,15 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     private fun getPinpadCoordinates(digit: Char, width: Int, height: Int): Pair<Float, Float>? {
-        val col1 = width * 0.25f // 270 on 1080
-        val col2 = width * 0.50f // 540 on 1080
-        val col3 = width * 0.75f // 810 on 1080
+        val col1 = 240f
+        val col2 = 540f // center on 1080
+        val col3 = 840f
 
-        // OxygenOS 14 keypad layout on 1080x2412:
-        val row1 = height * 0.58f // ~1400
-        val row2 = height * 0.66f // ~1590
-        val row3 = height * 0.745f // ~1795
-        val row4 = height * 0.83f // ~2000
+        // OnePlus Nord CE 2 Lite (OxygenOS 14) Keypad Layout on 1080x2412:
+        val row1 = 1380f
+        val row2 = 1580f
+        val row3 = 1780f
+        val row4 = 1980f
 
         return when (digit) {
             '1' -> Pair(col1, row1)
@@ -316,11 +310,11 @@ class PostlyAccessibilityService : AccessibilityService() {
             }
 
             AutomationStep.SEARCH_TYPED -> {
-                if (now - lastActionTime < 1000) return
+                if (now - lastActionTime < 1200) return
 
                 val targetName = task.recipientName.trim()
-                Log.d(TAG, "Step 3: Looking for search result matching '$targetName'")
-                val contactNode = findFirstMatchingContactNode(rootNode, targetName)
+                Log.d(TAG, "Step 3: Looking for exact chat contact matching '$targetName'")
+                val contactNode = findExactContactNode(rootNode, targetName)
 
                 if (contactNode != null) {
                     var clickable: AccessibilityNodeInfo? = contactNode
@@ -328,7 +322,7 @@ class PostlyAccessibilityService : AccessibilityService() {
                         clickable = clickable.parent
                     }
                     if (clickable != null) {
-                        Log.d(TAG, "Step 4: Clicking matched contact in search results")
+                        Log.d(TAG, "Step 4: Clicking matched contact in search results: $targetName")
                         clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                         currentStep = AutomationStep.CONTACT_CLICKED
                         lastActionTime = now
@@ -438,7 +432,7 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Recursively searches for WhatsApp Send button across all versions
+     * Recursively searches for WhatsApp Send button across all versions (strictly excluding voice mic button)
      */
     private fun findWhatsAppSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidate = scanForSendButton(root)
@@ -448,20 +442,28 @@ class PostlyAccessibilityService : AccessibilityService() {
         val ids = listOf(
             "com.whatsapp:id/send",
             "com.whatsapp.w4b:id/send",
-            "com.whatsapp:id/btn_send",
-            "com.whatsapp:id/send_container"
+            "com.whatsapp:id/btn_send"
         )
         for (id in ids) {
             val list = root.findAccessibilityNodeInfosByViewId(id)
-            if (!list.isNullOrEmpty()) return list[0]
+            for (node in list) {
+                val desc = node.contentDescription?.toString() ?: ""
+                if (!desc.contains("voice", ignoreCase = true)) {
+                    return node
+                }
+            }
         }
 
-        // Search by ContentDescription "Send" or "भेजें"
+        // Search by ContentDescription "Send" or "भेजें" (exact match)
         val sendWords = listOf("Send", "send", "भेजें")
         for (word in sendWords) {
             val textList = root.findAccessibilityNodeInfosByText(word)
             for (node in textList) {
-                if (node.isClickable) return node
+                val desc = node.contentDescription?.toString() ?: ""
+                val text = node.text?.toString() ?: ""
+                if ((desc.equals(word, ignoreCase = true) || text.equals(word, ignoreCase = true)) && !desc.contains("voice", ignoreCase = true)) {
+                    return node
+                }
             }
         }
 
@@ -472,8 +474,11 @@ class PostlyAccessibilityService : AccessibilityService() {
         val desc = node.contentDescription?.toString() ?: ""
         val id = node.viewIdResourceName ?: ""
 
-        if (desc.equals("Send", ignoreCase = true) || desc.contains("Send", ignoreCase = true) || desc.contains("भेजें") || id.endsWith(":id/send") || id.endsWith(":id/send_container")) {
-            return node
+        // Strict: Must not be voice message!
+        if (!desc.contains("voice", ignoreCase = true)) {
+            if (desc.equals("Send", ignoreCase = true) || desc.equals("भेजें", ignoreCase = true) || id.endsWith(":id/send")) {
+                return node
+            }
         }
 
         for (i in 0 until node.childCount) {
@@ -553,16 +558,41 @@ class PostlyAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun findFirstMatchingContactNode(root: AccessibilityNodeInfo, targetName: String): AccessibilityNodeInfo? {
-        val byText = root.findAccessibilityNodeInfosByText(targetName)
+    private fun findExactContactNode(root: AccessibilityNodeInfo, targetName: String): AccessibilityNodeInfo? {
+        val targetClean = targetName.trim()
+
+        // 1. Strict match on chat row contact name view IDs
+        val rowContactIds = listOf(
+            "com.whatsapp:id/conversations_row_contact_name",
+            "com.whatsapp.w4b:id/conversations_row_contact_name"
+        )
+        for (id in rowContactIds) {
+            val list = root.findAccessibilityNodeInfosByViewId(id)
+            for (node in list) {
+                val nodeText = node.text?.toString()?.trim() ?: ""
+                if (nodeText.equals(targetClean, ignoreCase = true) || nodeText.contains(targetClean, ignoreCase = true)) {
+                    return node
+                }
+            }
+        }
+
+        // 2. Search by text, but EXCLUDE message snippets, subtitles, and edit texts!
+        val byText = root.findAccessibilityNodeInfosByText(targetClean)
         for (node in byText) {
-            val nodeText = node.text?.toString() ?: ""
+            val id = node.viewIdResourceName ?: ""
+            if (id.contains("snippet") || id.contains("msg") || id.contains("search")) continue
             if (node.className?.contains("EditText") == true) continue
-            if (nodeText.contains(targetName, ignoreCase = true)) {
+
+            val nodeText = node.text?.toString()?.trim() ?: ""
+            if (nodeText.equals(targetClean, ignoreCase = true)) {
                 return node
             }
         }
         return null
+    }
+
+    private fun findFirstMatchingContactNode(root: AccessibilityNodeInfo, targetName: String): AccessibilityNodeInfo? {
+        return findExactContactNode(root, targetName)
     }
 
     private fun findPasswordField(rootNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -640,7 +670,7 @@ class PostlyAccessibilityService : AccessibilityService() {
     private fun clickAt(x: Float, y: Float) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             val path = Path().apply { moveTo(x, y) }
-            val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+            val stroke = GestureDescription.StrokeDescription(path, 0, 80)
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
             dispatchGesture(gesture, null, null)
         }

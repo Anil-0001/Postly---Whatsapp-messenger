@@ -75,11 +75,24 @@ class DispatchForegroundService : Service() {
     }
 
     private fun startForegroundNotification() {
+        val unlockIntent = Intent(this, UnlockScreenActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        }
+        val fullScreenPendingIntent = android.app.PendingIntent.getActivity(
+            this,
+            2002,
+            unlockIntent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = NotificationCompat.Builder(this, PostlyApplication.CHANNEL_SERVICE)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle("Postly Automator")
             .setContentText("Dispatching scheduled WhatsApp message...")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .build()
 

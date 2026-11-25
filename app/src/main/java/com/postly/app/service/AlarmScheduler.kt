@@ -36,20 +36,18 @@ object AlarmScheduler {
         val triggerTime = schedule.scheduledTimeMillis
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerTime,
-                    pendingIntent
-                )
-            } else {
-                alarmManager.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerTime,
-                    pendingIntent
-                )
-            }
-            Log.d(TAG, "Scheduled alarm for id: ${schedule.id} at $triggerTime")
+            val showIntent = Intent(context, com.postly.app.MainActivity::class.java)
+            val pendingShow = PendingIntent.getActivity(
+                context,
+                schedule.id.toInt(),
+                showIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // setAlarmClock is guaranteed to wake CPU and screen from deep sleep/Doze on Android 12-14
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTime, pendingShow)
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+            Log.d(TAG, "Scheduled AlarmClock for id: ${schedule.id} at $triggerTime")
         } catch (e: SecurityException) {
             Log.e(TAG, "Permission denied for exact alarm", e)
         }
