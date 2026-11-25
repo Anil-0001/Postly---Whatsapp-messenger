@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Path
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -136,7 +137,7 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Lockscreen Auto-Unlock for OnePlus / OxygenOS
+     * Lockscreen Auto-Unlock for OnePlus (OxygenOS 14)
      */
     private fun handleLockScreenUnlock(rootNode: AccessibilityNodeInfo) {
         val prefs = getSharedPreferences("postly_prefs", Context.MODE_PRIVATE)
@@ -152,15 +153,15 @@ class PostlyAccessibilityService : AccessibilityService() {
             try {
                 Log.d(TAG, "Executing OnePlus lockscreen unlock...")
 
-                // Check if PIN buttons are visible
-                var hasPinButtons = findPinpadDigit(rootNode, "1") != null
+                // Check if PIN buttons or password field are already visible
+                var hasPinButtons = findPinpadDigitNode(rootNode, "1") != null
                 var passwordField = findPasswordField(rootNode)
 
-                // If keypad is not visible, swipe up smoothly from bottom
+                // If keypad not yet visible, perform smooth swipe-up gesture
                 if (!hasPinButtons && passwordField == null) {
-                    Log.d(TAG, "Swiping up on OnePlus lockscreen to reveal PIN keypad...")
+                    Log.d(TAG, "Swiping up on OnePlus lockscreen to reveal keypad...")
                     performSwipeUpGesture()
-                    delay(800)
+                    delay(700)
                 }
 
                 val currentRoot = rootInActiveWindow ?: rootNode
@@ -174,15 +175,36 @@ class PostlyAccessibilityService : AccessibilityService() {
                     delay(300)
                     findAndClickNode(currentRoot, listOf("com.android.systemui:id/key_enter", "OK", "Done", "Enter"))
                 } else {
+                    // Type each digit in saved PIN
                     for (digit in savedPin) {
                         val digitStr = digit.toString()
-                        val keyNode = findPinpadDigit(currentRoot, digitStr)
-                        if (keyNode != null) {
-                            keyNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            delay(150)
+                        val digitNode = findPinpadDigitNode(currentRoot, digitStr)
+
+                        if (digitNode != null) {
+                            // Try normal accessibility click
+                            var clicked = digitNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            if (!clicked) {
+                                var parent = digitNode.parent
+                                while (parent != null && !clicked) {
+                                    clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                    parent = parent.parent
+                                }
+                            }
+
+                            // Also simulate tap gesture at exact screen bounds
+                            val bounds = Rect()
+                            digitNode.getBoundsInScreen(bounds)
+                            if (bounds.centerX() > 0 && bounds.centerY() > 0) {
+                                clickAt(bounds.centerX().toFloat(), bounds.centerY().toFloat())
+                            }
+                            delay(180)
+                        } else {
+                            Log.w(TAG, "Could not find node for digit: $digitStr")
                         }
                     }
+
                     delay(300)
+                    // Press Enter if required on device
                     findAndClickNode(currentRoot, listOf("com.android.systemui:id/key_enter", "com.android.systemui:id/btn_enter", "OK", "Done", "Enter"))
                 }
 
@@ -220,16 +242,17 @@ class PostlyAccessibilityService : AccessibilityService() {
 
         when (currentStep) {
             AutomationStep.IDLE, AutomationStep.START -> {
-                // Check if already in conversation
                 val chatEntry = findChatMessageEntryNode(rootNode)
-                if (chatEntry != null) {
-                    Log.d(TAG, "Already inside chat. Moving to CHAT_ENTERED.")
+                val sendBtn = findWhatsAppSendButton(rootNode)
+
+                if (chatEntry != null || sendBtn != null) {
+                    Log.d(TAG, "Already inside conversation screen. Moving to CHAT_ENTERED.")
                     currentStep = AutomationStep.CHAT_ENTERED
                     lastActionTime = now
                     return
                 }
 
-                // We are on WhatsApp Home screen: Click Search
+                // Click Search on WhatsApp Home screen
                 if (now - lastActionTime < 1000) return
                 val searchBtn = findSearchButton(rootNode)
                 if (searchBtn != null) {
@@ -250,6 +273,7 @@ class PostlyAccessibilityService : AccessibilityService() {
                     val args = Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetName)
                     }
+                    // ONLY use ACTION_SET_TEXT once
                     searchInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
                     currentStep = AutomationStep.SEARCH_TYPED
                     lastActionTime = now
@@ -280,7 +304,6 @@ class PostlyAccessibilityService : AccessibilityService() {
             AutomationStep.CONTACT_CLICKED -> {
                 if (now - lastActionTime < 800) return
 
-                // Check for chat message entry field
                 val chatEntry = findChatMessageEntryNode(rootNode)
                 if (chatEntry != null) {
                     Log.d(TAG, "Step 5: Chat conversation opened! Moving to CHAT_ENTERED.")
@@ -290,20 +313,24 @@ class PostlyAccessibilityService : AccessibilityService() {
             }
 
             AutomationStep.CHAT_ENTERED -> {
-                if (now - lastActionTime < 400) return
+                if (now - lastActionTime < 300) return
 
                 val chatEntry = findChatMessageEntryNode(rootNode)
                 if (chatEntry != null) {
-                    Log.d(TAG, "Step 6: Injecting message into WhatsApp chat entry: \"${task.message}\"")
+                    Log.d(TAG, "Step 6: Injecting message into WhatsApp chat entry (Single injection): \"${task.message}\"")
                     chatEntry.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
 
-                    // Inject text via ACTION_SET_TEXT and Clipboard PASTE for 100% compatibility
-                    copyToClipboard(task.message)
+                    // Inject message via ACTION_SET_TEXT ONLY (prevents typing twice!)
                     val args = Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, task.message)
                     }
-                    chatEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-                    chatEntry.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    val setTextSuccess = chatEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+                    // Fallback to clipboard ONLY if ACTION_SET_TEXT failed
+                    if (!setTextSuccess || chatEntry.text.isNullOrEmpty()) {
+                        copyToClipboard(task.message)
+                        chatEntry.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    }
 
                     currentStep = AutomationStep.MESSAGE_TYPED
                     lastActionTime = now
@@ -313,14 +340,32 @@ class PostlyAccessibilityService : AccessibilityService() {
             AutomationStep.MESSAGE_TYPED -> {
                 if (now - lastActionTime < 400) return
 
-                val sendBtn = findSendButton(rootNode)
+                val sendBtn = findWhatsAppSendButton(rootNode)
                 if (sendBtn != null) {
-                    Log.d(TAG, "Step 7: Clicking WhatsApp SEND button!")
-                    sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Log.d(TAG, "Step 7: Found WhatsApp SEND button! Clicking...")
+
+                    // 1. Accessibility click
+                    var clicked = sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    if (!clicked) {
+                        var p = sendBtn.parent
+                        while (p != null && !clicked) {
+                            clicked = p.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            p = p.parent
+                        }
+                    }
+
+                    // 2. Gesture tap directly at the button's screen coordinates (100% reliable)
+                    val rect = Rect()
+                    sendBtn.getBoundsInScreen(rect)
+                    if (rect.centerX() > 0 && rect.centerY() > 0) {
+                        Log.d(TAG, "Dispatching tap gesture at Send button coordinates: (${rect.centerX()}, ${rect.centerY()})")
+                        clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                    }
+
                     currentStep = AutomationStep.SEND_CLICKED
                     lastActionTime = now
 
-                    // Complete task in database
+                    // Mark task DONE in database
                     serviceScope.launch(Dispatchers.IO) {
                         val db = (applicationContext as PostlyApplication).database
                         db.scheduleDao().markDone(task.id, System.currentTimeMillis())
@@ -332,13 +377,59 @@ class PostlyAccessibilityService : AccessibilityService() {
                         delay(1500)
                         performGlobalAction(GLOBAL_ACTION_BACK)
                     }
+                } else {
+                    Log.w(TAG, "Send button not found yet, retrying...")
                 }
             }
 
             AutomationStep.SEND_CLICKED, AutomationStep.DONE -> {
-                // Finished
+                // Completed!
             }
         }
+    }
+
+    /**
+     * Recursively searches for WhatsApp Send button across all versions
+     */
+    private fun findWhatsAppSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val candidate = scanForSendButton(root)
+        if (candidate != null) return candidate
+
+        // Search by view IDs
+        val ids = listOf(
+            "com.whatsapp:id/send",
+            "com.whatsapp.w4b:id/send",
+            "com.whatsapp:id/btn_send",
+            "com.whatsapp:id/send_container"
+        )
+        for (id in ids) {
+            val list = root.findAccessibilityNodeInfosByViewId(id)
+            if (!list.isNullOrEmpty()) return list[0]
+        }
+
+        // Search by ContentDescription "Send"
+        val textList = root.findAccessibilityNodeInfosByText("Send")
+        for (node in textList) {
+            if (node.isClickable) return node
+        }
+
+        return null
+    }
+
+    private fun scanForSendButton(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val desc = node.contentDescription?.toString() ?: ""
+        val id = node.viewIdResourceName ?: ""
+
+        if (desc.equals("Send", ignoreCase = true) || id.endsWith(":id/send")) {
+            return node
+        }
+
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = scanForSendButton(child)
+            if (found != null) return found
+        }
+        return null
     }
 
     private fun findChatMessageEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -422,27 +513,6 @@ class PostlyAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun findSendButton(rootNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val knownSendIds = listOf(
-            "com.whatsapp:id/send",
-            "com.whatsapp.w4b:id/send",
-            "com.whatsapp:id/btn_send"
-        )
-        for (id in knownSendIds) {
-            val nodes = rootNode.findAccessibilityNodeInfosByViewId(id)
-            if (!nodes.isNullOrEmpty()) return nodes[0]
-        }
-
-        val descNodes = rootNode.findAccessibilityNodeInfosByText("Send")
-        for (node in descNodes) {
-            val desc = node.contentDescription?.toString()
-            if (desc.equals("Send", ignoreCase = true) && node.isClickable) {
-                return node
-            }
-        }
-        return null
-    }
-
     private fun findPasswordField(rootNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val list = rootNode.findAccessibilityNodeInfosByViewId("com.android.systemui:id/passwordEntry")
         if (!list.isNullOrEmpty()) return list[0]
@@ -453,39 +523,75 @@ class PostlyAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun findPinpadDigit(rootNode: AccessibilityNodeInfo, digit: String): AccessibilityNodeInfo? {
+    private fun findPinpadDigitNode(rootNode: AccessibilityNodeInfo, digit: String): AccessibilityNodeInfo? {
+        // 1. By ID
         val idList = listOf(
             "com.android.systemui:id/key$digit",
-            "com.android.systemui:id/button$digit"
+            "com.android.systemui:id/button$digit",
+            "com.android.systemui:id/digit_text"
         )
         for (id in idList) {
             val nodes = rootNode.findAccessibilityNodeInfosByViewId(id)
-            if (!nodes.isNullOrEmpty()) return nodes[0]
+            for (node in nodes) {
+                if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
+                    return node
+                }
+            }
         }
 
+        // 2. By Text or Description
         val textNodes = rootNode.findAccessibilityNodeInfosByText(digit)
         for (node in textNodes) {
-            if (node.isClickable && node.text?.toString() == digit) {
+            if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
                 return node
             }
         }
+
         return null
     }
 
     private fun findAndClickNode(rootNode: AccessibilityNodeInfo, targets: List<String>): Boolean {
         for (target in targets) {
             val byId = rootNode.findAccessibilityNodeInfosByViewId(target)
-            if (!byId.isNullOrEmpty() && byId[0].isClickable) {
-                byId[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return true
+            if (!byId.isNullOrEmpty()) {
+                val node = byId[0]
+                if (node.isClickable) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    return true
+                }
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                if (rect.centerX() > 0 && rect.centerY() > 0) {
+                    clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                    return true
+                }
             }
+
             val byText = rootNode.findAccessibilityNodeInfosByText(target)
-            if (!byText.isNullOrEmpty() && byText[0].isClickable) {
-                byText[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return true
+            if (!byText.isNullOrEmpty()) {
+                val node = byText[0]
+                if (node.isClickable) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    return true
+                }
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                if (rect.centerX() > 0 && rect.centerY() > 0) {
+                    clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                    return true
+                }
             }
         }
         return false
+    }
+
+    private fun clickAt(x: Float, y: Float) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val path = Path().apply { moveTo(x, y) }
+            val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+            dispatchGesture(gesture, null, null)
+        }
     }
 
     private fun copyToClipboard(text: String) {
