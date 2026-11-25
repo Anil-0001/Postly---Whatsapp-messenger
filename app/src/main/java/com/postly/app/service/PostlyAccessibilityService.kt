@@ -3,6 +3,8 @@ package com.postly.app.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Path
@@ -53,13 +55,14 @@ class PostlyAccessibilityService : AccessibilityService() {
         }
 
         // Case 2: Auto-unlock lockscreen if device is locked
-        if (packageName == "com.android.systemui" && pendingTask != null) {
+        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (keyguardManager.isKeyguardLocked && pendingTask != null) {
             val rootNode = rootInActiveWindow ?: return
             handleLockScreenUnlock(rootNode)
             return
         }
 
-        // Case 3: Message Dispatch Automation (Deterministic State Machine)
+        // Case 3: Message Dispatch Automation (Strict State Machine)
         val current = pendingTask
         if (current != null && (packageName == "com.whatsapp" || packageName == "com.whatsapp.w4b")) {
             val rootNode = rootInActiveWindow ?: return
@@ -133,7 +136,7 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Lockscreen Auto-Unlock
+     * Lockscreen Auto-Unlock for OnePlus / OxygenOS
      */
     private fun handleLockScreenUnlock(rootNode: AccessibilityNodeInfo) {
         val prefs = getSharedPreferences("postly_prefs", Context.MODE_PRIVATE)
@@ -147,15 +150,15 @@ class PostlyAccessibilityService : AccessibilityService() {
         isUnlocking = true
         serviceScope.launch {
             try {
-                Log.d(TAG, "Handling lock screen unlock...")
+                Log.d(TAG, "Executing OnePlus lockscreen unlock...")
 
                 // Check if PIN buttons are visible
                 var hasPinButtons = findPinpadDigit(rootNode, "1") != null
                 var passwordField = findPasswordField(rootNode)
 
-                // If not visible, swipe up to reveal keypad
+                // If keypad is not visible, swipe up smoothly from bottom
                 if (!hasPinButtons && passwordField == null) {
-                    Log.d(TAG, "Swiping up on lockscreen to reveal PIN keypad...")
+                    Log.d(TAG, "Swiping up on OnePlus lockscreen to reveal PIN keypad...")
                     performSwipeUpGesture()
                     delay(800)
                 }
@@ -199,8 +202,8 @@ class PostlyAccessibilityService : AccessibilityService() {
     private fun performSwipeUpGesture() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             val swipePath = Path().apply {
-                moveTo(540f, 2000f)
-                lineTo(540f, 500f)
+                moveTo(540f, 2100f)
+                lineTo(540f, 400f)
             }
             val gesture = GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(swipePath, 0, 250))
@@ -210,20 +213,17 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * DETERMINISTIC STATE MACHINE:
-     * Guarantees each action (Search, Type Name, Click Contact, Type Message, Click Send) happens EXACTLY ONCE!
+     * DETERMINISTIC STATE MACHINE FOR WHATSAPP AUTOMATION
      */
     private fun runWhatsAppStateMachine(rootNode: AccessibilityNodeInfo, task: ScheduleEntity) {
         val now = System.currentTimeMillis()
 
         when (currentStep) {
             AutomationStep.IDLE, AutomationStep.START -> {
-                // Check if we are already in the chat conversation (e.g. opened via direct send intent)
-                val chatEntry = rootNode.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry")?.firstOrNull()
-                val sendBtn = findSendButton(rootNode)
-
-                if (chatEntry != null || sendBtn != null) {
-                    Log.d(TAG, "Already inside conversation screen. Moving to CHAT_ENTERED.")
+                // Check if already in conversation
+                val chatEntry = findChatMessageEntryNode(rootNode)
+                if (chatEntry != null) {
+                    Log.d(TAG, "Already inside chat. Moving to CHAT_ENTERED.")
                     currentStep = AutomationStep.CHAT_ENTERED
                     lastActionTime = now
                     return
@@ -241,7 +241,6 @@ class PostlyAccessibilityService : AccessibilityService() {
             }
 
             AutomationStep.SEARCH_CLICKED -> {
-                // Wait at least 600ms for search input to be ready
                 if (now - lastActionTime < 600) return
 
                 val searchInput = findSearchInputNode(rootNode)
@@ -251,7 +250,6 @@ class PostlyAccessibilityService : AccessibilityService() {
                     val args = Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetName)
                     }
-                    // ONLY use ACTION_SET_TEXT once (prevents duplicate typing!)
                     searchInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
                     currentStep = AutomationStep.SEARCH_TYPED
                     lastActionTime = now
@@ -259,8 +257,7 @@ class PostlyAccessibilityService : AccessibilityService() {
             }
 
             AutomationStep.SEARCH_TYPED -> {
-                // Wait at least 1200ms for search results to appear
-                if (now - lastActionTime < 1200) return
+                if (now - lastActionTime < 1000) return
 
                 val targetName = task.recipientName.trim()
                 Log.d(TAG, "Step 3: Looking for search result matching '$targetName'")
@@ -281,13 +278,12 @@ class PostlyAccessibilityService : AccessibilityService() {
             }
 
             AutomationStep.CONTACT_CLICKED -> {
-                // Wait for conversation window to open
-                if (now - lastActionTime < 1000) return
+                if (now - lastActionTime < 800) return
 
-                // Confirm chat entry field is visible (and not search bar)
-                val chatEntry = rootNode.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry")?.firstOrNull()
+                // Check for chat message entry field
+                val chatEntry = findChatMessageEntryNode(rootNode)
                 if (chatEntry != null) {
-                    Log.d(TAG, "Step 5: Inside target chat conversation! Moving to CHAT_ENTERED.")
+                    Log.d(TAG, "Step 5: Chat conversation opened! Moving to CHAT_ENTERED.")
                     currentStep = AutomationStep.CHAT_ENTERED
                     lastActionTime = now
                 }
@@ -296,20 +292,25 @@ class PostlyAccessibilityService : AccessibilityService() {
             AutomationStep.CHAT_ENTERED -> {
                 if (now - lastActionTime < 400) return
 
-                val chatEntry = rootNode.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry")?.firstOrNull()
+                val chatEntry = findChatMessageEntryNode(rootNode)
                 if (chatEntry != null) {
-                    Log.d(TAG, "Step 6: Setting message text in conversation box: \"${task.message}\"")
+                    Log.d(TAG, "Step 6: Injecting message into WhatsApp chat entry: \"${task.message}\"")
+                    chatEntry.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+
+                    // Inject text via ACTION_SET_TEXT and Clipboard PASTE for 100% compatibility
+                    copyToClipboard(task.message)
                     val args = Bundle().apply {
                         putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, task.message)
                     }
                     chatEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    chatEntry.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+
                     currentStep = AutomationStep.MESSAGE_TYPED
                     lastActionTime = now
                 }
             }
 
             AutomationStep.MESSAGE_TYPED -> {
-                // Wait 400ms for send button to update with text
                 if (now - lastActionTime < 400) return
 
                 val sendBtn = findSendButton(rootNode)
@@ -319,7 +320,7 @@ class PostlyAccessibilityService : AccessibilityService() {
                     currentStep = AutomationStep.SEND_CLICKED
                     lastActionTime = now
 
-                    // Success! Complete schedule in database
+                    // Complete task in database
                     serviceScope.launch(Dispatchers.IO) {
                         val db = (applicationContext as PostlyApplication).database
                         db.scheduleDao().markDone(task.id, System.currentTimeMillis())
@@ -328,16 +329,36 @@ class PostlyAccessibilityService : AccessibilityService() {
                         pendingTask = null
                         currentStep = AutomationStep.DONE
 
-                        delay(1200)
+                        delay(1500)
                         performGlobalAction(GLOBAL_ACTION_BACK)
                     }
                 }
             }
 
             AutomationStep.SEND_CLICKED, AutomationStep.DONE -> {
-                // Completed!
+                // Finished
             }
         }
+    }
+
+    private fun findChatMessageEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val ids = listOf(
+            "com.whatsapp:id/entry",
+            "com.whatsapp.w4b:id/entry",
+            "com.whatsapp:id/conversation_text_entry",
+            "com.whatsapp:id/input"
+        )
+        for (id in ids) {
+            val list = root.findAccessibilityNodeInfosByViewId(id)
+            if (!list.isNullOrEmpty()) return list[0]
+        }
+
+        val messageNodes = root.findAccessibilityNodeInfosByText("Message")
+        for (node in messageNodes) {
+            if (node.className?.contains("EditText") == true) return node
+        }
+
+        return findFirstEditText(root)
     }
 
     private fun findSearchButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -393,7 +414,6 @@ class PostlyAccessibilityService : AccessibilityService() {
         val byText = root.findAccessibilityNodeInfosByText(targetName)
         for (node in byText) {
             val nodeText = node.text?.toString() ?: ""
-            // Ensure this is not the search input itself
             if (node.className?.contains("EditText") == true) continue
             if (nodeText.contains(targetName, ignoreCase = true)) {
                 return node
@@ -466,6 +486,15 @@ class PostlyAccessibilityService : AccessibilityService() {
             }
         }
         return false
+    }
+
+    private fun copyToClipboard(text: String) {
+        try {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("PostlyMessage", text))
+        } catch (e: Exception) {
+            Log.e(TAG, "Clipboard copy error", e)
+        }
     }
 
     fun launchWhatsAppTarget(task: ScheduleEntity) {
