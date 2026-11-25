@@ -2,12 +2,16 @@ package com.postly.app.ui.screens
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.Intent
+import android.net.Uri
+import android.provider.ContactsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -17,7 +21,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -27,6 +30,7 @@ import com.postly.app.data.model.Platform
 import com.postly.app.data.model.RepeatRule
 import com.postly.app.data.model.ScheduleEntity
 import com.postly.app.data.model.ScheduleStatus
+import com.postly.app.service.PostlyAccessibilityService
 import com.postly.app.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.*
@@ -35,6 +39,7 @@ import java.util.*
 @Composable
 fun CreateScheduleScreen(
     platform: Platform,
+    initialContactName: String = "",
     onBack: () -> Unit,
     onOpenRequirements: () -> Unit,
     onSaveSchedule: (ScheduleEntity) -> Unit
@@ -42,7 +47,7 @@ fun CreateScheduleScreen(
     val context = LocalContext.current
     val calendar = remember { Calendar.getInstance().apply { add(Calendar.MINUTE, 5) } }
 
-    var recipientName by remember { mutableStateOf("") }
+    var recipientName by remember { mutableStateOf(initialContactName) }
     var recipientPhone by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
@@ -61,6 +66,31 @@ fun CreateScheduleScreen(
 
     var displayDate by remember { mutableStateOf(dateFormatter.format(Date(scheduledMillis))) }
     var displayTime by remember { mutableStateOf(timeFormatter.format(Date(scheduledMillis))) }
+
+    // System Phonebook Picker Launcher
+    val contactPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickContact()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val nameIdx = it.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+                    if (nameIdx >= 0) {
+                        recipientName = it.getString(nameIdx) ?: ""
+                    }
+                }
+            }
+        }
+    }
+
+    // Listen to contact picked via WhatsApp Accessibility
+    LaunchedEffect(Unit) {
+        PostlyAccessibilityService.onContactPickedCallback = { capturedName ->
+            recipientName = capturedName
+            recipientPhone = ""
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -223,15 +253,28 @@ fun CreateScheduleScreen(
                                     expanded = isRecipientMenuOpen,
                                     onDismissRequest = { isRecipientMenuOpen = false }
                                 ) {
+                                    // WhatsApp: Opens WhatsApp directly to pick any chat/group
                                     DropdownMenuItem(
                                         text = { Text("Whatsapp") },
                                         leadingIcon = { Icon(Icons.Default.Send, null, Modifier.size(18.dp)) },
-                                        onClick = { isRecipientMenuOpen = false; isManualContactDialogOpen = true }
+                                        onClick = {
+                                            isRecipientMenuOpen = false
+                                            // Enable Accessibility contact picking mode
+                                            PostlyAccessibilityService.isPickingContact = true
+                                            val launchIntent = context.packageManager.getLaunchIntentForPackage("com.whatsapp")
+                                            if (launchIntent != null) {
+                                                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                context.startActivity(launchIntent)
+                                            }
+                                        }
                                     )
                                     DropdownMenuItem(
                                         text = { Text("Phonebook") },
                                         leadingIcon = { Icon(Icons.Default.MenuBook, null, Modifier.size(18.dp)) },
-                                        onClick = { isRecipientMenuOpen = false; isManualContactDialogOpen = true }
+                                        onClick = {
+                                            isRecipientMenuOpen = false
+                                            contactPickerLauncher.launch(null)
+                                        }
                                     )
                                     DropdownMenuItem(
                                         text = { Text("Postly Lists") },
@@ -274,9 +317,9 @@ fun CreateScheduleScreen(
                             ) {
                                 Column {
                                     Text(
-                                        text = recipientName.ifBlank { "WhatsApp Recipient" },
+                                        text = recipientName.ifBlank { "WhatsApp Chat" },
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 14.sp,
+                                        fontSize = 15.sp,
                                         color = BrandBlueDark
                                     )
                                     if (recipientPhone.isNotBlank()) {
@@ -351,7 +394,6 @@ fun CreateScheduleScreen(
                         )
                     )
 
-                    // Helper buttons on right (Variables {}, Templates, Location)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Surface(
                             shape = RoundedCornerShape(8.dp),
@@ -458,7 +500,6 @@ fun CreateScheduleScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Date & Time pickers
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -571,7 +612,6 @@ fun CreateScheduleScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Conflict & Summary Buttons
                     Button(
                         onClick = {},
                         modifier = Modifier.fillMaxWidth(),
@@ -627,7 +667,7 @@ fun CreateScheduleScreen(
         }
     }
 
-    // Manual Contact Dialog
+    // Manual Contact Dialog (Only if user chooses "Enter Manually")
     if (isManualContactDialogOpen) {
         var tempName by remember { mutableStateOf(recipientName) }
         var tempPhone by remember { mutableStateOf(recipientPhone) }

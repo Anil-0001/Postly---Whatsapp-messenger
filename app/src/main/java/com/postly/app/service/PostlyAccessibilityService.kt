@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.postly.app.MainActivity
 import com.postly.app.PostlyApplication
 import com.postly.app.data.model.ScheduleEntity
 import kotlinx.coroutines.CoroutineScope
@@ -29,12 +30,17 @@ class PostlyAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        val current = pendingTask ?: return
 
         val packageName = event.packageName?.toString() ?: ""
 
-        // 1. Check if device is on LockScreen (com.android.systemui) and user provided a PIN
-        if (packageName == "com.android.systemui") {
+        // Case 1: Contact Picking Mode (When user selects 'Whatsapp' inside Postly to pick a recipient)
+        if (isPickingContact && (packageName == "com.whatsapp" || packageName == "com.whatsapp.w4b")) {
+            handleContactPickerEvent(event)
+            return
+        }
+
+        // Case 2: Auto-unlock lockscreen if device is locked
+        if (packageName == "com.android.systemui" && pendingTask != null) {
             val rootNode = rootInActiveWindow ?: return
             serviceScope.launch {
                 handleLockScreenUnlock(rootNode)
@@ -42,12 +48,83 @@ class PostlyAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 2. Check if WhatsApp or WhatsApp Business is in foreground
-        if (packageName == "com.whatsapp" || packageName == "com.whatsapp.w4b") {
+        // Case 3: Message Dispatch Automation
+        val current = pendingTask
+        if (current != null && (packageName == "com.whatsapp" || packageName == "com.whatsapp.w4b")) {
             val rootNode = rootInActiveWindow ?: return
             serviceScope.launch {
                 handleWhatsAppAutomation(rootNode, current)
             }
+        }
+    }
+
+    /**
+     * Intercepts chat clicks in WhatsApp to pick contact/group for Postly
+     */
+    private fun handleContactPickerEvent(event: AccessibilityEvent) {
+        val rootNode = rootInActiveWindow ?: return
+
+        // 1. Try to read from Conversation screen header (when chat is opened)
+        val conversationHeaderIds = listOf(
+            "com.whatsapp:id/conversation_contact_name",
+            "com.whatsapp.w4b:id/conversation_contact_name",
+            "com.whatsapp:id/toolbar_title"
+        )
+        for (id in conversationHeaderIds) {
+            val nodes = rootNode.findAccessibilityNodeInfosByViewId(id)
+            if (!nodes.isNullOrEmpty() && !nodes[0].text.isNullOrBlank()) {
+                val contactName = nodes[0].text.toString().trim()
+                completeContactPick(contactName)
+                return
+            }
+        }
+
+        // 2. Try to read from clicked item in the chat list
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            val source = event.source
+            if (source != null) {
+                val rowContactIds = listOf(
+                    "com.whatsapp:id/conversations_row_contact_name",
+                    "com.whatsapp.w4b:id/conversations_row_contact_name"
+                )
+                for (id in rowContactIds) {
+                    val nodes = source.findAccessibilityNodeInfosByViewId(id)
+                    if (!nodes.isNullOrEmpty() && !nodes[0].text.isNullOrBlank()) {
+                        val contactName = nodes[0].text.toString().trim()
+                        completeContactPick(contactName)
+                        return
+                    }
+                }
+
+                // Or check the clicked node text directly
+                val text = source.text?.toString() ?: source.contentDescription?.toString()
+                if (!text.isNullOrBlank() && text.length > 1 && !text.equals("Search", ignoreCase = true)) {
+                    completeContactPick(text.trim())
+                    return
+                }
+            }
+        }
+    }
+
+    private fun completeContactPick(contactName: String) {
+        if (!isPickingContact) return
+        Log.d(TAG, "Successfully captured WhatsApp contact: $contactName")
+        isPickingContact = false
+        pickedContactName = contactName
+
+        // Invoke callback
+        onContactPickedCallback?.invoke(contactName)
+
+        // Bring Postly back to front
+        serviceScope.launch {
+            delay(300)
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            delay(200)
+            val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                putExtra("picked_contact", contactName)
+            }
+            startActivity(intent)
         }
     }
 
@@ -64,7 +141,6 @@ class PostlyAccessibilityService : AccessibilityService() {
             delay(500)
             Log.d(TAG, "Attempting to auto-unlock device with saved PIN...")
 
-            // Try to find password/PIN edit field first
             val passwordField = findPasswordField(rootNode)
             if (passwordField != null) {
                 val arguments = Bundle().apply {
@@ -75,10 +151,8 @@ class PostlyAccessibilityService : AccessibilityService() {
                 }
                 passwordField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
                 delay(300)
-                // Press Enter / Confirm
                 findAndClickNode(rootNode, listOf("com.android.systemui:id/key_enter", "com.android.systemui:id/btn_enter", "OK", "Done"))
             } else {
-                // Pinpad digits 0-9
                 for (digit in savedPin) {
                     val digitStr = digit.toString()
                     val keyNode = findPinpadDigit(rootNode, digitStr)
@@ -88,12 +162,10 @@ class PostlyAccessibilityService : AccessibilityService() {
                     }
                 }
                 delay(300)
-                // Press Enter if required
                 findAndClickNode(rootNode, listOf("com.android.systemui:id/key_enter", "com.android.systemui:id/btn_enter", "OK", "Done", "Enter"))
             }
 
             delay(1000)
-            // Once unlocked, launch WhatsApp directly for the pending task
             val current = pendingTask
             if (current != null) {
                 launchWhatsAppTarget(current)
@@ -125,7 +197,6 @@ class PostlyAccessibilityService : AccessibilityService() {
             if (!nodes.isNullOrEmpty()) return nodes[0]
         }
 
-        // Search by text
         val textNodes = rootNode.findAccessibilityNodeInfosByText(digit)
         for (node in textNodes) {
             if (node.isClickable && node.text?.toString() == digit) {
@@ -178,25 +249,21 @@ class PostlyAccessibilityService : AccessibilityService() {
                 sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 Log.d(TAG, "Target reached: WhatsApp message sent successfully!")
 
-                // Mark Task Done in Room Database
                 val db = (applicationContext as PostlyApplication).database
                 db.scheduleDao().markDone(task.id, System.currentTimeMillis())
 
-                // Handle recurring rules
                 AlarmScheduler.handleRecurringSchedule(applicationContext, task)
 
                 pendingTask = null
                 delay(1200)
 
-                // Return to home screen or Postly
                 performGlobalAction(GLOBAL_ACTION_BACK)
                 return
             }
 
-            // STEP 2: If we are on WhatsApp Main/Home screen and contact name is specified without phone
+            // STEP 2: If we are on WhatsApp Main/Home screen and contact name was selected
             val targetName = task.recipientName.trim()
             if (targetName.isNotEmpty() && task.recipientPhone.isBlank()) {
-                // Click Search icon
                 val searchButton = findNodeByViewIdOrDesc(rootNode, listOf(
                     "com.whatsapp:id/menuitem_search",
                     "com.whatsapp.w4b:id/menuitem_search"
@@ -207,7 +274,6 @@ class PostlyAccessibilityService : AccessibilityService() {
                     delay(500)
                 }
 
-                // Find search input and type recipient name
                 val searchInput = findSearchBox(rootNode)
                 if (searchInput != null) {
                     val arguments = Bundle().apply {
@@ -219,7 +285,6 @@ class PostlyAccessibilityService : AccessibilityService() {
                     searchInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
                     delay(1200)
 
-                    // Click first matching contact from results
                     val contactNode = findNodeByText(rootNode, targetName)
                     if (contactNode != null) {
                         contactNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -237,15 +302,17 @@ class PostlyAccessibilityService : AccessibilityService() {
     fun launchWhatsAppTarget(task: ScheduleEntity) {
         try {
             val cleanPhone = task.recipientPhone.replace("+", "").replace(" ", "").replace("-", "")
+            val targetPkg = if (task.platform.contains("business", ignoreCase = true)) "com.whatsapp.w4b" else "com.whatsapp"
+
             val intent = if (cleanPhone.isNotEmpty()) {
                 val encodedMsg = URLEncoder.encode(task.message, "UTF-8")
                 val uri = Uri.parse("whatsapp://send?phone=$cleanPhone&text=$encodedMsg")
                 Intent(Intent.ACTION_VIEW, uri).apply {
-                    setPackage(if (task.platform.contains("business", ignoreCase = true)) "com.whatsapp.w4b" else "com.whatsapp")
+                    setPackage(targetPkg)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
             } else {
-                packageManager.getLaunchIntentForPackage("com.whatsapp")?.apply {
+                packageManager.getLaunchIntentForPackage(targetPkg)?.apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
             }
@@ -322,6 +389,7 @@ class PostlyAccessibilityService : AccessibilityService() {
         Log.d(TAG, "Accessibility Service Interrupted")
         isProcessing = false
         isUnlocking = false
+        isPickingContact = false
     }
 
     override fun onDestroy() {
@@ -333,6 +401,10 @@ class PostlyAccessibilityService : AccessibilityService() {
         private const val TAG = "PostlyAccessService"
         var instance: PostlyAccessibilityService? = null
         var pendingTask: ScheduleEntity? = null
+        var isPickingContact = false
+        var pickedContactName: String? = null
+        var onContactPickedCallback: ((String) -> Unit)? = null
+
         private var isProcessing = false
         private var isUnlocking = false
 
