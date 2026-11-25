@@ -21,9 +21,11 @@ class PostlyApplication : Application() {
             val serviceChannel = NotificationChannel(
                 CHANNEL_SERVICE,
                 "Postly Dispatch Service",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Runs while dispatching scheduled messages"
+                description = "Runs while dispatching scheduled messages and turns screen on"
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true)
             }
 
             val alertsChannel = NotificationChannel(

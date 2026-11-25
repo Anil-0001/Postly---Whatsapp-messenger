@@ -25,7 +25,33 @@ class AlarmReceiver : BroadcastReceiver() {
 
         Log.d(TAG, "Alarm received for schedule: $scheduleId")
 
-        // Use goAsync to keep CPU awake while checking schedule and starting foreground service
+        // 1. Force the physical screen to turn ON immediately from sleep/Doze
+        try {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            @Suppress("DEPRECATION")
+            val screenWakeLock = powerManager.newWakeLock(
+                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                android.os.PowerManager.ON_AFTER_RELEASE,
+                "Postly:AlarmScreenWake"
+            )
+            screenWakeLock.acquire(15000)
+            Log.d(TAG, "Physical screen wake lock acquired with ACQUIRE_CAUSES_WAKEUP")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error acquiring screen wake lock", e)
+        }
+
+        // 2. Launch UnlockScreenActivity immediately to dismiss keyguard & turn screen on
+        try {
+            val unlockIntent = Intent(context, com.postly.app.UnlockScreenActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            }
+            context.startActivity(unlockIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting UnlockScreenActivity from receiver", e)
+        }
+
+        // 3. Use goAsync to keep CPU awake while checking schedule and starting foreground service
         val pendingResult = goAsync()
         val app = context.applicationContext as PostlyApplication
 
