@@ -153,6 +153,9 @@ class PostlyAccessibilityService : AccessibilityService() {
             try {
                 Log.d(TAG, "Executing OnePlus lockscreen unlock...")
 
+                val width = resources.displayMetrics.widthPixels
+                val height = resources.displayMetrics.heightPixels
+
                 // Check if PIN buttons or password field are already visible
                 var hasPinButtons = findPinpadDigitNode(rootNode, "1") != null
                 var passwordField = findPasswordField(rootNode)
@@ -161,7 +164,7 @@ class PostlyAccessibilityService : AccessibilityService() {
                 if (!hasPinButtons && passwordField == null) {
                     Log.d(TAG, "Swiping up on OnePlus lockscreen to reveal keypad...")
                     performSwipeUpGesture()
-                    delay(700)
+                    delay(800)
                 }
 
                 val currentRoot = rootInActiveWindow ?: rootNode
@@ -179,33 +182,39 @@ class PostlyAccessibilityService : AccessibilityService() {
                     for (digit in savedPin) {
                         val digitStr = digit.toString()
                         val digitNode = findPinpadDigitNode(currentRoot, digitStr)
+                        var tapped = false
 
                         if (digitNode != null) {
-                            // Try normal accessibility click
-                            var clicked = digitNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            if (!clicked) {
-                                var parent = digitNode.parent
-                                while (parent != null && !clicked) {
-                                    clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                                    parent = parent.parent
-                                }
-                            }
-
-                            // Also simulate tap gesture at exact screen bounds
                             val bounds = Rect()
                             digitNode.getBoundsInScreen(bounds)
                             if (bounds.centerX() > 0 && bounds.centerY() > 0) {
+                                Log.d(TAG, "Tapping node bounds for digit $digitStr: (${bounds.centerX()}, ${bounds.centerY()})")
                                 clickAt(bounds.centerX().toFloat(), bounds.centerY().toFloat())
+                                tapped = true
+                            } else {
+                                tapped = digitNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                             }
-                            delay(180)
-                        } else {
-                            Log.w(TAG, "Could not find node for digit: $digitStr")
                         }
+
+                        // If accessibility node wasn't found or clickable (common on OxygenOS 14 keyguard security)
+                        if (!tapped) {
+                            val coords = getPinpadCoordinates(digit, width, height)
+                            if (coords != null) {
+                                Log.d(TAG, "Fallback tapping OnePlus PIN coordinate for '$digit' at (${coords.first}, ${coords.second})")
+                                clickAt(coords.first, coords.second)
+                            }
+                        }
+                        delay(220)
                     }
 
-                    delay(300)
+                    delay(350)
                     // Press Enter if required on device
-                    findAndClickNode(currentRoot, listOf("com.android.systemui:id/key_enter", "com.android.systemui:id/btn_enter", "OK", "Done", "Enter"))
+                    val enterTapped = findAndClickNode(currentRoot, listOf("com.android.systemui:id/key_enter", "com.android.systemui:id/btn_enter", "OK", "Done", "Enter"))
+                    if (!enterTapped) {
+                        // Fallback enter coordinate for OnePlus keypad
+                        val enterCoords = Pair(width * 0.75f, height * 0.83f)
+                        clickAt(enterCoords.first, enterCoords.second)
+                    }
                 }
 
                 delay(1200)
@@ -218,6 +227,32 @@ class PostlyAccessibilityService : AccessibilityService() {
             } finally {
                 isUnlocking = false
             }
+        }
+    }
+
+    private fun getPinpadCoordinates(digit: Char, width: Int, height: Int): Pair<Float, Float>? {
+        val col1 = width * 0.25f // 270 on 1080
+        val col2 = width * 0.50f // 540 on 1080
+        val col3 = width * 0.75f // 810 on 1080
+
+        // OxygenOS 14 keypad layout on 1080x2412:
+        val row1 = height * 0.58f // ~1400
+        val row2 = height * 0.66f // ~1590
+        val row3 = height * 0.745f // ~1795
+        val row4 = height * 0.83f // ~2000
+
+        return when (digit) {
+            '1' -> Pair(col1, row1)
+            '2' -> Pair(col2, row1)
+            '3' -> Pair(col3, row1)
+            '4' -> Pair(col1, row2)
+            '5' -> Pair(col2, row2)
+            '6' -> Pair(col3, row2)
+            '7' -> Pair(col1, row3)
+            '8' -> Pair(col2, row3)
+            '9' -> Pair(col3, row3)
+            '0' -> Pair(col2, row4)
+            else -> null
         }
     }
 
@@ -317,69 +352,83 @@ class PostlyAccessibilityService : AccessibilityService() {
 
                 val chatEntry = findChatMessageEntryNode(rootNode)
                 if (chatEntry != null) {
-                    Log.d(TAG, "Step 6: Injecting message into WhatsApp chat entry (Single injection): \"${task.message}\"")
-                    chatEntry.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-
-                    // Inject message via ACTION_SET_TEXT ONLY (prevents typing twice!)
-                    val args = Bundle().apply {
-                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, task.message)
-                    }
-                    val setTextSuccess = chatEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-
-                    // Fallback to clipboard ONLY if ACTION_SET_TEXT failed
-                    if (!setTextSuccess || chatEntry.text.isNullOrEmpty()) {
-                        copyToClipboard(task.message)
-                        chatEntry.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-                    }
-
                     currentStep = AutomationStep.MESSAGE_TYPED
                     lastActionTime = now
-                }
-            }
 
-            AutomationStep.MESSAGE_TYPED -> {
-                if (now - lastActionTime < 400) return
+                    serviceScope.launch {
+                        Log.d(TAG, "Step 6: Injecting message into WhatsApp chat entry (Single injection): \"${task.message}\"")
+                        chatEntry.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                        delay(120)
 
-                val sendBtn = findWhatsAppSendButton(rootNode)
-                if (sendBtn != null) {
-                    Log.d(TAG, "Step 7: Found WhatsApp SEND button! Clicking...")
-
-                    // 1. Accessibility click
-                    var clicked = sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    if (!clicked) {
-                        var p = sendBtn.parent
-                        while (p != null && !clicked) {
-                            clicked = p.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            p = p.parent
+                        // 1. Single injection - ACTION_SET_TEXT
+                        val args = Bundle().apply {
+                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, task.message)
                         }
-                    }
+                        val setTextSuccess = chatEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
-                    // 2. Gesture tap directly at the button's screen coordinates (100% reliable)
-                    val rect = Rect()
-                    sendBtn.getBoundsInScreen(rect)
-                    if (rect.centerX() > 0 && rect.centerY() > 0) {
-                        Log.d(TAG, "Dispatching tap gesture at Send button coordinates: (${rect.centerX()}, ${rect.centerY()})")
-                        clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
-                    }
+                        // Fallback to clipboard ONLY if ACTION_SET_TEXT returned false
+                        if (!setTextSuccess) {
+                            Log.d(TAG, "ACTION_SET_TEXT returned false, using clipboard paste fallback")
+                            copyToClipboard(task.message)
+                            delay(100)
+                            chatEntry.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                        }
 
-                    currentStep = AutomationStep.SEND_CLICKED
-                    lastActionTime = now
+                        // 2. Wait for WhatsApp to render the green Send button (replaces mic icon)
+                        delay(400)
 
-                    // Mark task DONE in database
-                    serviceScope.launch(Dispatchers.IO) {
-                        val db = (applicationContext as PostlyApplication).database
-                        db.scheduleDao().markDone(task.id, System.currentTimeMillis())
-                        AlarmScheduler.handleRecurringSchedule(applicationContext, task)
+                        // 3. Find and click Send button
+                        val freshRoot = rootInActiveWindow ?: rootNode
+                        val sendBtn = findWhatsAppSendButton(freshRoot)
+
+                        var sendClicked = false
+                        if (sendBtn != null) {
+                            Log.d(TAG, "Step 7: Found WhatsApp Send button node! Clicking...")
+                            val rect = Rect()
+                            sendBtn.getBoundsInScreen(rect)
+                            if (rect.centerX() > 0 && rect.centerY() > 0) {
+                                Log.d(TAG, "Dispatching tap gesture at Send button coordinates: (${rect.centerX()}, ${rect.centerY()})")
+                                clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                                sendClicked = true
+                            }
+                            if (!sendClicked) {
+                                sendClicked = sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            }
+                        }
+
+                        // 4. Guaranteed coordinate fallback if node wasn't clickable or found
+                        // In WhatsApp, the Send button is always at the bottom-right aligned with the message input box
+                        if (!sendClicked) {
+                            val entryRect = Rect()
+                            chatEntry.getBoundsInScreen(entryRect)
+                            val displayMetrics = resources.displayMetrics
+                            val fallbackX = displayMetrics.widthPixels - 75f
+                            val fallbackY = if (entryRect.centerY() > 0) entryRect.centerY().toFloat() else (displayMetrics.heightPixels - 120f)
+                            Log.d(TAG, "Step 7 Fallback: Dispatching tap gesture at Send button coordinates: ($fallbackX, $fallbackY)")
+                            clickAt(fallbackX, fallbackY)
+                        }
+
+                        currentStep = AutomationStep.SEND_CLICKED
+
+                        // 5. Mark task DONE in database and re-arm if recurring
+                        withContext(Dispatchers.IO) {
+                            val db = (applicationContext as PostlyApplication).database
+                            db.scheduleDao().markDone(task.id, System.currentTimeMillis())
+                            AlarmScheduler.handleRecurringSchedule(applicationContext, task)
+                        }
 
                         pendingTask = null
                         currentStep = AutomationStep.DONE
+                        Log.d(TAG, "Step 8: WhatsApp message successfully sent! Task marked DONE.")
 
                         delay(1500)
                         performGlobalAction(GLOBAL_ACTION_BACK)
                     }
-                } else {
-                    Log.w(TAG, "Send button not found yet, retrying...")
                 }
+            }
+
+            AutomationStep.MESSAGE_TYPED -> {
+                // Handled directly inside coroutine above
             }
 
             AutomationStep.SEND_CLICKED, AutomationStep.DONE -> {
@@ -407,10 +456,13 @@ class PostlyAccessibilityService : AccessibilityService() {
             if (!list.isNullOrEmpty()) return list[0]
         }
 
-        // Search by ContentDescription "Send"
-        val textList = root.findAccessibilityNodeInfosByText("Send")
-        for (node in textList) {
-            if (node.isClickable) return node
+        // Search by ContentDescription "Send" or "भेजें"
+        val sendWords = listOf("Send", "send", "भेजें")
+        for (word in sendWords) {
+            val textList = root.findAccessibilityNodeInfosByText(word)
+            for (node in textList) {
+                if (node.isClickable) return node
+            }
         }
 
         return null
@@ -420,7 +472,7 @@ class PostlyAccessibilityService : AccessibilityService() {
         val desc = node.contentDescription?.toString() ?: ""
         val id = node.viewIdResourceName ?: ""
 
-        if (desc.equals("Send", ignoreCase = true) || id.endsWith(":id/send")) {
+        if (desc.equals("Send", ignoreCase = true) || desc.contains("Send", ignoreCase = true) || desc.contains("भेजें") || id.endsWith(":id/send") || id.endsWith(":id/send_container")) {
             return node
         }
 
