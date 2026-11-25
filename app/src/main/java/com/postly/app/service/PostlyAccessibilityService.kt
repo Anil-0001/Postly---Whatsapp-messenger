@@ -630,11 +630,7 @@ class PostlyAccessibilityService : AccessibilityService() {
 
     private fun findPasswordField(rootNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val list = rootNode.findAccessibilityNodeInfosByViewId("com.android.systemui:id/passwordEntry")
-        if (!list.isNullOrEmpty()) return list[0]
-
-        val pinEntryList = rootNode.findAccessibilityNodeInfosByViewId("com.android.systemui:id/pinEntry")
-        if (!pinEntryList.isNullOrEmpty()) return pinEntryList[0]
-
+        if (!list.isNullOrEmpty() && list[0].className?.contains("EditText") == true) return list[0]
         return null
     }
 

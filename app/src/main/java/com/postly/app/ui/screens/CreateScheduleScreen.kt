@@ -45,7 +45,13 @@ fun CreateScheduleScreen(
     onSaveSchedule: (ScheduleEntity) -> Unit
 ) {
     val context = LocalContext.current
-    val calendar = remember { Calendar.getInstance().apply { add(Calendar.MINUTE, 5) } }
+    val calendar = remember {
+        Calendar.getInstance().apply {
+            add(Calendar.MINUTE, 5)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+    }
 
     var recipientName by remember { mutableStateOf(initialContactName) }
     var recipientPhone by remember { mutableStateOf("") }
@@ -515,6 +521,8 @@ fun CreateScheduleScreen(
                                             calendar.set(Calendar.YEAR, y)
                                             calendar.set(Calendar.MONTH, m)
                                             calendar.set(Calendar.DAY_OF_MONTH, d)
+                                            calendar.set(Calendar.SECOND, 0)
+                                            calendar.set(Calendar.MILLISECOND, 0)
                                             scheduledMillis = calendar.timeInMillis
                                             displayDate = dateFormatter.format(Date(scheduledMillis))
                                         },
@@ -546,6 +554,8 @@ fun CreateScheduleScreen(
                                         { _, h, min ->
                                             calendar.set(Calendar.HOUR_OF_DAY, h)
                                             calendar.set(Calendar.MINUTE, min)
+                                            calendar.set(Calendar.SECOND, 0)
+                                            calendar.set(Calendar.MILLISECOND, 0)
                                             scheduledMillis = calendar.timeInMillis
                                             displayTime = timeFormatter.format(Date(scheduledMillis))
                                         },
