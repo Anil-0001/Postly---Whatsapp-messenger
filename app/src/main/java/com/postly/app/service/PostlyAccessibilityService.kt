@@ -225,15 +225,19 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     private fun getPinpadCoordinates(digit: Char, width: Int, height: Int): Pair<Float, Float>? {
-        // OnePlus Nord CE 2 Lite (OxygenOS 14) Keypad Layout on 1080x2412:
-        val col1 = 270f
-        val col2 = 540f // center on 1080
-        val col3 = 810f
+        val w = width.toFloat()
+        val h = height.toFloat()
 
-        val row1 = 1380f
-        val row2 = 1580f
-        val row3 = 1780f
-        val row4 = 1980f
+        // Universal 3-column PIN pad grid responsive to all screen resolutions & brands
+        // (Xiaomi/Redmi/Poco, Samsung, OnePlus, Oppo, Vivo, Realme, Motorola, Google Pixel)
+        val col1 = w * 0.25f // Left column (1, 4, 7)
+        val col2 = w * 0.50f // Center column (2, 5, 8, 0)
+        val col3 = w * 0.75f // Right column (3, 6, 9)
+
+        val row1 = h * 0.572f // Row 1 (1, 2, 3)
+        val row2 = h * 0.655f // Row 2 (4, 5, 6)
+        val row3 = h * 0.738f // Row 3 (7, 8, 9)
+        val row4 = h * 0.821f // Row 4 (0)
 
         return when (digit) {
             '1' -> Pair(col1, row1)
@@ -252,9 +256,15 @@ class PostlyAccessibilityService : AccessibilityService() {
 
     private fun performSwipeUpGesture() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val width = resources.displayMetrics.widthPixels.toFloat()
+            val height = resources.displayMetrics.heightPixels.toFloat()
+            val startX = width * 0.5f
+            val startY = height * 0.85f
+            val endY = height * 0.20f
+
             val swipePath = Path().apply {
-                moveTo(540f, 2100f)
-                lineTo(540f, 400f)
+                moveTo(startX, startY)
+                lineTo(startX, endY)
             }
             val gesture = GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(swipePath, 0, 250))
@@ -640,21 +650,27 @@ class PostlyAccessibilityService : AccessibilityService() {
 
     private fun findPinpadDigitNode(rootNode: AccessibilityNodeInfo, digit: String): AccessibilityNodeInfo? {
         val bounds = Rect()
+        val minCenterY = (resources.displayMetrics.heightPixels * 0.45f).toInt()
 
-        // Match strictly by Keyguard Keypad IDs
+        // Match strictly by Keyguard Keypad IDs across brands (Xiaomi, Samsung, OnePlus, Vivo, etc.)
         val idList = listOf(
             "com.android.systemui:id/key$digit",
+            "com.android.keyguard:id/key$digit",
+            "com.android.keyguard:id/digit_text",
+            "com.miui.securitycenter:id/key_$digit",
+            "com.miui.keyguard:id/key$digit",
             "com.android.systemui:id/button$digit",
             "com.android.systemui:id/digit_text",
             "com.android.systemui:id/digit_$digit",
             "com.android.systemui:id/key_$digit",
-            "com.oplus.securitykeyboard:id/key_$digit"
+            "com.oplus.securitykeyboard:id/key_$digit",
+            "com.sec.android.app.launcher:id/key$digit"
         )
         for (id in idList) {
             val nodes = rootNode.findAccessibilityNodeInfosByViewId(id)
             for (node in nodes) {
                 node.getBoundsInScreen(bounds)
-                if (bounds.centerY() > 1100 && bounds.width() in 80..450 && bounds.height() in 80..450) {
+                if (bounds.centerY() > minCenterY && bounds.width() in 60..600 && bounds.height() in 60..600) {
                     if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
                         return node
                     }

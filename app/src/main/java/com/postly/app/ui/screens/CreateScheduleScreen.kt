@@ -73,7 +73,7 @@ fun CreateScheduleScreen(
     var repeatRule by remember { mutableStateOf(RepeatRule.NO_REPEAT) }
     var askBeforeSending by remember { mutableStateOf(false) }
     var generateThumbnails by remember { mutableStateOf(false) }
-    var retryIntervalMinutes by remember { mutableStateOf(2) }
+    var retryIntervalMinutes by remember { mutableStateOf<Int?>(null) }
     var isRetryMenuOpen by remember { mutableStateOf(false) }
 
     // Attachment State
@@ -230,7 +230,7 @@ fun CreateScheduleScreen(
             attachmentType = attachmentType,
             attachmentName = attachmentName,
             attachmentSize = attachmentSize,
-            retryIntervalMinutes = retryIntervalMinutes,
+            retryIntervalMinutes = retryIntervalMinutes ?: 0,
             retryCount = 0,
             maxRetries = 3
         )
@@ -1057,7 +1057,7 @@ fun CreateScheduleScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 val retryText = when (retryIntervalMinutes) {
-                                    0 -> "No retry (Fail immediately)"
+                                    null, 0 -> "Select retry interval (Off)"
                                     1 -> "Retry after 1 minute (Max 3 times)"
                                     2 -> "Retry after 2 minutes (Max 3 times)"
                                     3 -> "Retry after 3 minutes (Max 3 times)"
@@ -1065,7 +1065,11 @@ fun CreateScheduleScreen(
                                     10 -> "Retry after 10 minutes (Max 3 times)"
                                     else -> "Retry after $retryIntervalMinutes minutes (Max 3 times)"
                                 }
-                                Text(retryText, fontSize = 14.sp, color = TextPrimary)
+                                Text(
+                                    text = retryText,
+                                    fontSize = 14.sp,
+                                    color = if (retryIntervalMinutes != null && retryIntervalMinutes != 0) TextPrimary else TextSecondary
+                                )
                                 Icon(Icons.Default.ArrowDropDown, null, tint = TextSecondary)
                             }
                         }
@@ -1075,7 +1079,7 @@ fun CreateScheduleScreen(
                             onDismissRequest = { isRetryMenuOpen = false }
                         ) {
                             listOf(
-                                0 to "No retry (Fail immediately)",
+                                null to "Off (Don't retry)",
                                 1 to "Retry after 1 minute (Max 3 times)",
                                 2 to "Retry after 2 minutes (Max 3 times)",
                                 3 to "Retry after 3 minutes (Max 3 times)",
@@ -1095,10 +1099,10 @@ fun CreateScheduleScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = if (retryIntervalMinutes > 0)
+                        text = if (retryIntervalMinutes != null && retryIntervalMinutes != 0)
                             "If mobile data is off or delivery fails, Postly will automatically retry up to 3 times before marking as Failed. Status stays Pending while retrying."
                         else
-                            "Message will directly fail if internet is off or sending fails.",
+                            "Default: No retry. Select an interval if you want Postly to auto-retry when data is off.",
                         fontSize = 11.sp,
                         color = TextSecondary
                     )
