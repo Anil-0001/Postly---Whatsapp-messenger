@@ -37,6 +37,7 @@ class PostlyAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
     private var lastActionTime = 0L
+    private var isExecutingAutomation = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -63,11 +64,12 @@ class PostlyAccessibilityService : AccessibilityService() {
             return
         }
 
-        // Case 3: Message Dispatch Automation (Strict State Machine)
+        // Case 3: Message Dispatch Automation (Sequential Coroutine)
         val current = pendingTask
         if (current != null && (packageName == "com.whatsapp" || packageName == "com.whatsapp.w4b")) {
-            val rootNode = rootInActiveWindow ?: return
-            runWhatsAppStateMachine(rootNode, current)
+            if (!isExecutingAutomation) {
+                startWhatsAppAutomation(current)
+            }
         }
     }
 
@@ -264,171 +266,193 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * DETERMINISTIC STATE MACHINE FOR WHATSAPP AUTOMATION
+     * SEQUENTIAL WHATSAPP AUTOMATION
+     * Eliminates state race conditions and ensures steps execute strictly in order:
+     * 1. Search & select exact contact (if phone is empty)
+     * 2. Find chat entry and inject message text
+     * 3. Click green Send button
+     * 4. Mark task DONE in database
      */
-    private fun runWhatsAppStateMachine(rootNode: AccessibilityNodeInfo, task: ScheduleEntity) {
-        val now = System.currentTimeMillis()
+    private fun startWhatsAppAutomation(task: ScheduleEntity) {
+        if (isExecutingAutomation) return
+        isExecutingAutomation = true
 
-        when (currentStep) {
-            AutomationStep.IDLE, AutomationStep.START -> {
-                val chatEntry = findChatMessageEntryNode(rootNode)
-                val sendBtn = findWhatsAppSendButton(rootNode)
+        serviceScope.launch {
+            try {
+                Log.d(TAG, "Starting sequential WhatsApp automation for: ${task.recipientName}")
 
-                if (chatEntry != null || sendBtn != null) {
-                    Log.d(TAG, "Already inside conversation screen. Moving to CHAT_ENTERED.")
-                    currentStep = AutomationStep.CHAT_ENTERED
-                    lastActionTime = now
-                    return
-                }
+                // 1. Wait for WhatsApp to settle
+                delay(1000)
 
-                // Click Search on WhatsApp Home screen
-                if (now - lastActionTime < 1000) return
-                val searchBtn = findSearchButton(rootNode)
-                if (searchBtn != null) {
-                    Log.d(TAG, "Step 1: Clicking WhatsApp Search button")
-                    searchBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    currentStep = AutomationStep.SEARCH_CLICKED
-                    lastActionTime = now
-                }
-            }
+                val cleanPhone = task.recipientPhone.replace("+", "").replace(" ", "").replace("-", "")
+                val needsSearch = cleanPhone.isEmpty() && task.recipientName.isNotEmpty()
 
-            AutomationStep.SEARCH_CLICKED -> {
-                if (now - lastActionTime < 600) return
-
-                val searchInput = findSearchInputNode(rootNode)
-                if (searchInput != null) {
-                    val targetName = task.recipientName.trim()
-                    Log.d(TAG, "Step 2: Typing contact name '$targetName' into search bar")
-                    val args = Bundle().apply {
-                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, targetName)
-                    }
-                    // ONLY use ACTION_SET_TEXT once
-                    searchInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-                    currentStep = AutomationStep.SEARCH_TYPED
-                    lastActionTime = now
-                }
-            }
-
-            AutomationStep.SEARCH_TYPED -> {
-                if (now - lastActionTime < 1200) return
-
-                val targetName = task.recipientName.trim()
-                Log.d(TAG, "Step 3: Looking for exact chat contact matching '$targetName'")
-                val contactNode = findExactContactNode(rootNode, targetName)
-
-                if (contactNode != null) {
-                    var clickable: AccessibilityNodeInfo? = contactNode
-                    while (clickable != null && !clickable.isClickable) {
-                        clickable = clickable.parent
-                    }
-                    if (clickable != null) {
-                        Log.d(TAG, "Step 4: Clicking matched contact in search results: $targetName")
-                        clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        currentStep = AutomationStep.CONTACT_CLICKED
-                        lastActionTime = now
+                if (needsSearch) {
+                    val opened = searchAndOpenContact(task.recipientName)
+                    if (!opened) {
+                        Log.e(TAG, "Failed to find and open contact: ${task.recipientName}")
+                        isExecutingAutomation = false
+                        return@launch
                     }
                 }
-            }
 
-            AutomationStep.CONTACT_CLICKED -> {
-                if (now - lastActionTime < 800) return
-
-                val chatEntry = findChatMessageEntryNode(rootNode)
-                if (chatEntry != null) {
-                    Log.d(TAG, "Step 5: Chat conversation opened! Moving to CHAT_ENTERED.")
-                    currentStep = AutomationStep.CHAT_ENTERED
-                    lastActionTime = now
+                // 2. We are now inside the chat conversation!
+                // Wait for the message entry box to appear (poll up to 10 times)
+                var chatEntry: AccessibilityNodeInfo? = null
+                for (attempt in 1..10) {
+                    val root = rootInActiveWindow
+                    if (root != null) {
+                        chatEntry = findChatMessageEntryNode(root)
+                        if (chatEntry != null) break
+                    }
+                    delay(300)
                 }
-            }
 
-            AutomationStep.CHAT_ENTERED -> {
-                if (now - lastActionTime < 300) return
+                if (chatEntry == null) {
+                    Log.e(TAG, "Could not find chat message entry box in conversation")
+                    isExecutingAutomation = false
+                    return@launch
+                }
 
-                val chatEntry = findChatMessageEntryNode(rootNode)
-                if (chatEntry != null) {
-                    currentStep = AutomationStep.MESSAGE_TYPED
-                    lastActionTime = now
+                // 3. Inject message text (Single injection)
+                Log.d(TAG, "Found chat entry. Typing message: ${task.message}")
+                chatEntry.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                delay(150)
+                val args = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, task.message)
+                }
+                val setTextSuccess = chatEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                if (!setTextSuccess) {
+                    copyToClipboard(task.message)
+                    delay(100)
+                    chatEntry.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                }
 
-                    serviceScope.launch {
-                        Log.d(TAG, "Step 6: Injecting message into WhatsApp chat entry (Single injection): \"${task.message}\"")
-                        chatEntry.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                        delay(120)
+                // 4. Wait for WhatsApp to render the green Send button
+                delay(450)
 
-                        // 1. Single injection - ACTION_SET_TEXT
-                        val args = Bundle().apply {
-                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, task.message)
-                        }
-                        val setTextSuccess = chatEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-
-                        // Fallback to clipboard ONLY if ACTION_SET_TEXT returned false
-                        if (!setTextSuccess) {
-                            Log.d(TAG, "ACTION_SET_TEXT returned false, using clipboard paste fallback")
-                            copyToClipboard(task.message)
-                            delay(100)
-                            chatEntry.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-                        }
-
-                        // 2. Wait for WhatsApp to render the green Send button (replaces mic icon)
-                        delay(400)
-
-                        // 3. Find and click Send button
-                        val freshRoot = rootInActiveWindow ?: rootNode
+                // 5. Find and click Send button (retry up to 5 times)
+                var sendClicked = false
+                for (attempt in 1..5) {
+                    val freshRoot = rootInActiveWindow
+                    if (freshRoot != null) {
                         val sendBtn = findWhatsAppSendButton(freshRoot)
-
-                        var sendClicked = false
                         if (sendBtn != null) {
-                            Log.d(TAG, "Step 7: Found WhatsApp Send button node! Clicking...")
+                            Log.d(TAG, "Found WhatsApp Send button! Clicking (attempt $attempt)...")
                             val rect = Rect()
                             sendBtn.getBoundsInScreen(rect)
-                            if (rect.centerX() > 0 && rect.centerY() > 0) {
-                                Log.d(TAG, "Dispatching tap gesture at Send button coordinates: (${rect.centerX()}, ${rect.centerY()})")
+
+                            sendClicked = sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            if (!sendClicked && rect.centerX() > 0) {
                                 clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
                                 sendClicked = true
                             }
-                            if (!sendClicked) {
-                                sendClicked = sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                            }
+                            if (sendClicked) break
                         }
-
-                        // 4. Guaranteed coordinate fallback if node wasn't clickable or found
-                        // In WhatsApp, the Send button is always at the bottom-right aligned with the message input box
-                        if (!sendClicked) {
-                            val entryRect = Rect()
-                            chatEntry.getBoundsInScreen(entryRect)
-                            val displayMetrics = resources.displayMetrics
-                            val fallbackX = displayMetrics.widthPixels - 75f
-                            val fallbackY = if (entryRect.centerY() > 0) entryRect.centerY().toFloat() else (displayMetrics.heightPixels - 120f)
-                            Log.d(TAG, "Step 7 Fallback: Dispatching tap gesture at Send button coordinates: ($fallbackX, $fallbackY)")
-                            clickAt(fallbackX, fallbackY)
-                        }
-
-                        currentStep = AutomationStep.SEND_CLICKED
-
-                        // 5. Mark task DONE in database and re-arm if recurring
-                        withContext(Dispatchers.IO) {
-                            val db = (applicationContext as PostlyApplication).database
-                            db.scheduleDao().markDone(task.id, System.currentTimeMillis())
-                            AlarmScheduler.handleRecurringSchedule(applicationContext, task)
-                        }
-
-                        pendingTask = null
-                        currentStep = AutomationStep.DONE
-                        Log.d(TAG, "Step 8: WhatsApp message successfully sent! Task marked DONE.")
-
-                        delay(1500)
-                        performGlobalAction(GLOBAL_ACTION_BACK)
                     }
+                    delay(250)
                 }
-            }
 
-            AutomationStep.MESSAGE_TYPED -> {
-                // Handled directly inside coroutine above
-            }
+                // 6. Coordinate fallback if node wasn't clicked
+                if (!sendClicked) {
+                    val freshRoot = rootInActiveWindow
+                    val freshEntry = if (freshRoot != null) findChatMessageEntryNode(freshRoot) else null
+                    val entryRect = Rect()
+                    freshEntry?.getBoundsInScreen(entryRect)
+                    val fallbackX = resources.displayMetrics.widthPixels - 85f
+                    val fallbackY = if (entryRect.centerY() > 0) entryRect.centerY().toFloat() else 2310f
+                    Log.d(TAG, "Fallback clicking Send button at ($fallbackX, $fallbackY)")
+                    clickAt(fallbackX, fallbackY)
+                }
 
-            AutomationStep.SEND_CLICKED, AutomationStep.DONE -> {
-                // Completed!
+                // 7. Mark task DONE in database and re-arm if recurring
+                withContext(Dispatchers.IO) {
+                    val db = (applicationContext as PostlyApplication).database
+                    db.scheduleDao().markDone(task.id, System.currentTimeMillis())
+                    AlarmScheduler.handleRecurringSchedule(applicationContext, task)
+                }
+
+                pendingTask = null
+                Log.d(TAG, "Step 8: WhatsApp message successfully sent! Task marked DONE.")
+
+                delay(1500)
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in WhatsApp automation", e)
+            } finally {
+                isExecutingAutomation = false
             }
         }
+    }
+
+    private suspend fun searchAndOpenContact(targetName: String): Boolean {
+        val cleanName = targetName.trim()
+        Log.d(TAG, "Searching for contact: $cleanName")
+
+        // Step 1: Click Search button
+        var searchClicked = false
+        for (i in 1..6) {
+            val root = rootInActiveWindow ?: continue
+            val searchBtn = findSearchButton(root)
+            if (searchBtn != null) {
+                searchBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                searchClicked = true
+                break
+            }
+            delay(300)
+        }
+
+        if (!searchClicked) {
+            Log.w(TAG, "Could not find Search button")
+            return false
+        }
+
+        delay(400)
+
+        // Step 2: Find search input and type recipientName
+        var searchInput: AccessibilityNodeInfo? = null
+        for (i in 1..6) {
+            val root = rootInActiveWindow ?: continue
+            searchInput = findSearchInputNode(root)
+            if (searchInput != null) break
+            delay(300)
+        }
+
+        if (searchInput == null) {
+            Log.w(TAG, "Could not find Search input field")
+            return false
+        }
+
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cleanName)
+        }
+        searchInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        Log.d(TAG, "Typed '$cleanName' into search bar. Waiting for results...")
+
+        // Step 3: Wait for search results to load
+        delay(1500)
+
+        // Step 4: Find the exact contact in search results
+        for (attempt in 1..6) {
+            val root = rootInActiveWindow ?: continue
+            val contactNode = findExactContactNode(root, cleanName)
+            if (contactNode != null) {
+                var clickable: AccessibilityNodeInfo? = contactNode
+                while (clickable != null && !clickable.isClickable) {
+                    clickable = clickable.parent
+                }
+                if (clickable != null) {
+                    Log.d(TAG, "Found and clicking exact matched contact: $cleanName")
+                    clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    delay(800)
+                    return true
+                }
+            }
+            delay(400)
+        }
+
+        Log.w(TAG, "Contact '$cleanName' not found in search results")
+        return false
     }
 
     /**
@@ -489,24 +513,33 @@ class PostlyAccessibilityService : AccessibilityService() {
         return null
     }
 
+    /**
+     * Finds the message input box in a WhatsApp conversation.
+     * Strictly verifies it is NOT a search bar.
+     */
     private fun findChatMessageEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val ids = listOf(
             "com.whatsapp:id/entry",
             "com.whatsapp.w4b:id/entry",
-            "com.whatsapp:id/conversation_text_entry",
-            "com.whatsapp:id/input"
+            "com.whatsapp:id/conversation_text_entry"
         )
         for (id in ids) {
             val list = root.findAccessibilityNodeInfosByViewId(id)
-            if (!list.isNullOrEmpty()) return list[0]
+            for (node in list) {
+                val resId = node.viewIdResourceName ?: ""
+                if (!resId.contains("search")) return node
+            }
         }
 
         val messageNodes = root.findAccessibilityNodeInfosByText("Message")
         for (node in messageNodes) {
-            if (node.className?.contains("EditText") == true) return node
+            val resId = node.viewIdResourceName ?: ""
+            if (node.className?.contains("EditText") == true && !resId.contains("search")) {
+                return node
+            }
         }
 
-        return findFirstEditText(root)
+        return null // Never fall back to search bar!
     }
 
     private fun findSearchButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -606,26 +639,36 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     private fun findPinpadDigitNode(rootNode: AccessibilityNodeInfo, digit: String): AccessibilityNodeInfo? {
-        // 1. By ID
+        val bounds = Rect()
+
+        // 1. By ID (strictly in keypad area y > 1100)
         val idList = listOf(
             "com.android.systemui:id/key$digit",
             "com.android.systemui:id/button$digit",
-            "com.android.systemui:id/digit_text"
+            "com.android.systemui:id/digit_text",
+            "com.android.systemui:id/digit_$digit",
+            "com.android.systemui:id/key_$digit"
         )
         for (id in idList) {
             val nodes = rootNode.findAccessibilityNodeInfosByViewId(id)
             for (node in nodes) {
-                if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
-                    return node
+                node.getBoundsInScreen(bounds)
+                if (bounds.centerY() > 1100) {
+                    if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
+                        return node
+                    }
                 }
             }
         }
 
-        // 2. By Text or Description
+        // 2. By Text or Description (Strictly in lower half y > 1100 to avoid Clock / Date widgets)
         val textNodes = rootNode.findAccessibilityNodeInfosByText(digit)
         for (node in textNodes) {
-            if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
-                return node
+            node.getBoundsInScreen(bounds)
+            if (bounds.centerY() > 1100) {
+                if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
+                    return node
+                }
             }
         }
 
