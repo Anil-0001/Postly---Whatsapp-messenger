@@ -305,6 +305,22 @@ fun ScheduleCard(
                             tint = BrandBlue,
                             modifier = Modifier.size(16.dp)
                         )
+                    } else if (schedule.status == ScheduleStatus.FAILED.name) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = "Failed",
+                            tint = DangerRed,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    } else if (schedule.retryCount > 0) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Retrying",
+                            tint = WarningOrange,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
 
@@ -325,8 +341,8 @@ fun ScheduleCard(
                         onDismissRequest = { isMenuOpen = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Send Now") },
-                            leadingIcon = { Icon(Icons.Default.Send, null, Modifier.size(18.dp)) },
+                            text = { Text(if (schedule.status == ScheduleStatus.FAILED.name) "Retry Now" else "Send Now") },
+                            leadingIcon = { Icon(if (schedule.status == ScheduleStatus.FAILED.name) Icons.Default.Refresh else Icons.Default.Send, null, Modifier.size(18.dp)) },
                             onClick = {
                                 isMenuOpen = false
                                 onSendNow()
@@ -407,6 +423,82 @@ fun ScheduleCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                    }
+                }
+            }
+
+            // Failure Reason Card
+            if (schedule.status == ScheduleStatus.FAILED.name) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFFFEBEE),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFCDD2)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = "Failed",
+                            tint = DangerRed,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Status: Failed",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = DangerRed
+                            )
+                            Text(
+                                text = schedule.errorMessage ?: "Message delivery failed",
+                                fontSize = 11.sp,
+                                color = Color(0xFFB71C1C)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Pending with Retry Active Card
+            if (schedule.status == ScheduleStatus.PENDING.name && schedule.retryCount > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFFFF3E0),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFE0B2)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Retrying",
+                            tint = WarningOrange,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Pending (Retry Attempt ${schedule.retryCount}/${schedule.maxRetries})",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = WarningOrange
+                            )
+                            if (!schedule.errorMessage.isNullOrBlank()) {
+                                Text(
+                                    text = schedule.errorMessage,
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFE65100)
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -73,6 +73,8 @@ fun CreateScheduleScreen(
     var repeatRule by remember { mutableStateOf(RepeatRule.NO_REPEAT) }
     var askBeforeSending by remember { mutableStateOf(false) }
     var generateThumbnails by remember { mutableStateOf(false) }
+    var retryIntervalMinutes by remember { mutableStateOf(2) }
+    var isRetryMenuOpen by remember { mutableStateOf(false) }
 
     // Attachment State
     var attachmentUri by remember { mutableStateOf<String?>(null) }
@@ -227,7 +229,10 @@ fun CreateScheduleScreen(
             attachmentUri = attachmentUri,
             attachmentType = attachmentType,
             attachmentName = attachmentName,
-            attachmentSize = attachmentSize
+            attachmentSize = attachmentSize,
+            retryIntervalMinutes = retryIntervalMinutes,
+            retryCount = 0,
+            maxRetries = 3
         )
     }
 
@@ -1013,6 +1018,89 @@ fun CreateScheduleScreen(
                         checked = askBeforeSending,
                         onCheckedChange = { askBeforeSending = it },
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = BrandBlue)
+                    )
+                }
+            }
+
+            // Retry on Failure / Network Issue
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Refresh, null, tint = BrandBlue, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Retry on Failure / Network Issue", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Box {
+                        OutlinedCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isRetryMenuOpen = true },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val retryText = when (retryIntervalMinutes) {
+                                    0 -> "No retry (Fail immediately)"
+                                    1 -> "Retry after 1 minute (Max 3 times)"
+                                    2 -> "Retry after 2 minutes (Max 3 times)"
+                                    3 -> "Retry after 3 minutes (Max 3 times)"
+                                    5 -> "Retry after 5 minutes (Max 3 times)"
+                                    10 -> "Retry after 10 minutes (Max 3 times)"
+                                    else -> "Retry after $retryIntervalMinutes minutes (Max 3 times)"
+                                }
+                                Text(retryText, fontSize = 14.sp, color = TextPrimary)
+                                Icon(Icons.Default.ArrowDropDown, null, tint = TextSecondary)
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = isRetryMenuOpen,
+                            onDismissRequest = { isRetryMenuOpen = false }
+                        ) {
+                            listOf(
+                                0 to "No retry (Fail immediately)",
+                                1 to "Retry after 1 minute (Max 3 times)",
+                                2 to "Retry after 2 minutes (Max 3 times)",
+                                3 to "Retry after 3 minutes (Max 3 times)",
+                                5 to "Retry after 5 minutes (Max 3 times)",
+                                10 to "Retry after 10 minutes (Max 3 times)"
+                            ).forEach { (minutes, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        retryIntervalMinutes = minutes
+                                        isRetryMenuOpen = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (retryIntervalMinutes > 0)
+                            "If mobile data is off or delivery fails, Postly will automatically retry up to 3 times before marking as Failed. Status stays Pending while retrying."
+                        else
+                            "Message will directly fail if internet is off or sending fails.",
+                        fontSize = 11.sp,
+                        color = TextSecondary
                     )
                 }
             }

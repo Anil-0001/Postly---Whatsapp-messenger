@@ -46,6 +46,15 @@ class DispatchForegroundService : Service() {
                 return@launch
             }
 
+            // Check network connectivity before starting automation
+            if (!com.postly.app.util.NetworkUtils.isNetworkAvailable(applicationContext)) {
+                Log.w(TAG, "Device is offline / mobile data or Wi-Fi is off. Triggering retry for schedule: ${schedule.id}")
+                RetryManager.handleFailure(applicationContext, schedule, "Network issue: Mobile data or Wi-Fi is off")
+                releaseWakeLock()
+                stopSelf()
+                return@launch
+            }
+
             // Assign pending task to Accessibility Service and reset state
             PostlyAccessibilityService.pendingTask = schedule
             PostlyAccessibilityService.currentStep = AutomationStep.START

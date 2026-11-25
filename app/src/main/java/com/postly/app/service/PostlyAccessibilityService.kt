@@ -289,6 +289,8 @@ class PostlyAccessibilityService : AccessibilityService() {
                     val opened = searchAndOpenContact(task.recipientName)
                     if (!opened) {
                         Log.e(TAG, "Failed to find and open contact: ${task.recipientName}")
+                        RetryManager.handleFailure(applicationContext, task, "Contact '${task.recipientName}' not found in WhatsApp")
+                        pendingTask = null
                         isExecutingAutomation = false
                         return@launch
                     }
@@ -308,6 +310,8 @@ class PostlyAccessibilityService : AccessibilityService() {
 
                 if (chatEntry == null) {
                     Log.e(TAG, "Could not find chat message entry box in conversation")
+                    RetryManager.handleFailure(applicationContext, task, "Chat conversation entry box not found")
+                    pendingTask = null
                     isExecutingAutomation = false
                     return@launch
                 }
@@ -377,6 +381,8 @@ class PostlyAccessibilityService : AccessibilityService() {
                 performGlobalAction(GLOBAL_ACTION_BACK)
             } catch (e: Exception) {
                 Log.e(TAG, "Error in WhatsApp automation", e)
+                RetryManager.handleFailure(applicationContext, task, "Automation error: ${e.message ?: "Unknown"}")
+                pendingTask = null
             } finally {
                 isExecutingAutomation = false
             }

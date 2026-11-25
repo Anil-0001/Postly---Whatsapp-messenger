@@ -53,5 +53,8 @@ data class ScheduleEntity(
     val attachmentUri: String? = null,
     val attachmentType: String? = null,
     val attachmentName: String? = null,
-    val attachmentSize: String? = null
+    val attachmentSize: String? = null,
+    val retryIntervalMinutes: Int = 2,
+    val retryCount: Int = 0,
+    val maxRetries: Int = 3
 )
