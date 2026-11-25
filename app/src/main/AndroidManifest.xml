@@ -41,6 +41,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Unlock Activity for Waking Screen and Triggering Keyguard Dismissal -->
+        <activity
+            android:name=".UnlockScreenActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- Accessibility Service for WhatsApp Automation -->
         <service
             android:name=".service.PostlyAccessibilityService"

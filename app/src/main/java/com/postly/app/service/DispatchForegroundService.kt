@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.postly.app.PostlyApplication
+import com.postly.app.UnlockScreenActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,16 +53,19 @@ class DispatchForegroundService : Service() {
             val isLocked = keyguardManager.isKeyguardLocked
 
             if (isLocked) {
-                Log.d(TAG, "Screen is locked. Waiting for Accessibility Service to enter PIN...")
-                // Wait for accessibility service to auto-unlock using PIN or SmartLock
-                delay(3000)
+                Log.d(TAG, "Screen is locked! Launching UnlockScreenActivity to turn screen on & dismiss keyguard...")
+                val unlockIntent = Intent(applicationContext, UnlockScreenActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                }
+                startActivity(unlockIntent)
+                delay(2500) // Allow Accessibility Service time to swipe and enter PIN
             }
 
-            // Launch targeted WhatsApp chat directly
+            // Launch targeted WhatsApp
             launchTargetedWhatsApp(schedule.recipientPhone, schedule.message, schedule.platform)
 
             // Keep service alive to allow accessibility service to finish typing & clicking
-            delay(15000)
+            delay(20000)
             releaseWakeLock()
             stopSelf()
         }
@@ -73,7 +77,7 @@ class DispatchForegroundService : Service() {
         val notification = NotificationCompat.Builder(this, PostlyApplication.CHANNEL_SERVICE)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle("Postly Automator")
-            .setContentText("Targeting WhatsApp conversation...")
+            .setContentText("Dispatching scheduled WhatsApp message...")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
@@ -88,7 +92,6 @@ class DispatchForegroundService : Service() {
 
             val intent = if (cleanPhone.isNotEmpty()) {
                 val encodedMsg = URLEncoder.encode(message, "UTF-8")
-                // Deep link directly targets this exact phone number in WhatsApp
                 val uri = Uri.parse("whatsapp://send?phone=$cleanPhone&text=$encodedMsg")
                 Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(targetPkg)
