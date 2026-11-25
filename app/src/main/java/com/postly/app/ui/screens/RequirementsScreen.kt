@@ -9,21 +9,23 @@ import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.postly.app.service.PostlyAccessibilityService
@@ -35,6 +37,10 @@ fun RequirementsScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("postly_prefs", Context.MODE_PRIVATE) }
+    var savedPin by remember { mutableStateOf(prefs.getString("device_screen_pin", "") ?: "") }
+    var isPinDialogOpen by remember { mutableStateOf(false) }
+
     val isAccessibilityEnabled = PostlyAccessibilityService.isServiceRunning()
 
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -137,29 +143,67 @@ fun RequirementsScreen(
                 }
             )
 
-            // Card 4: Bypass Screen Lock
+            // Card 4: Bypass Screen Lock (Matching SKEDit exact card & PIN input)
             Card(
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Bypass Screen Lock",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Bypass Screen Lock",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        if (savedPin.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "PIN Set",
+                                tint = SuccessGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "To start the sending process automatically at scheduled time, complete one of these actions:\n" +
-                                "1. Activate Smart Lock from your device settings.\n" +
-                                "2. Remove your screen lock by setting it to 'swipe' or 'none'.\n\n" +
-                                "Otherwise, enable 'Ask me before sending' when scheduling, and you will receive a notification to click at the scheduled time to trigger auto-sending.",
+                        text = "To start the sending process automatically at the scheduled time, complete one of these actions:\n" +
+                                "1. Enter your device's 'pin' or 'password' in Postly settings to enable auto unlock of your screen.\n" +
+                                "2. Activate smart lock from your device settings.\n" +
+                                "3. Remove your screen lock by setting it to 'swipe' or 'none'.\n\n" +
+                                "Otherwise, enable 'ask me before sending' when scheduling and you'll get a notification to click on at the scheduled time to start the auto-sending.",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         lineHeight = 18.sp
                     )
+
                     Spacer(modifier = Modifier.height(14.dp))
+
+                    // Button 1: Provide PIN or Password
+                    Button(
+                        onClick = { isPinDialogOpen = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Lock, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (savedPin.isEmpty()) "Provide Pin or Password" else "Update Screen Lock PIN (Set: ••••)",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Button 2: Enable Smart Lock
                     Button(
                         onClick = {
                             val intent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
@@ -171,7 +215,22 @@ fun RequirementsScreen(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Open Security / Lock Settings", color = BrandBlue, fontSize = 14.sp)
+                        Text("Enable Smart Lock", color = BrandBlue, fontSize = 14.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Button 3: Disable Screen Lock
+                    TextButton(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                            }
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Disable Screen Lock", color = BrandBlue, fontSize = 13.sp)
                     }
                 }
             }
@@ -195,6 +254,49 @@ fun RequirementsScreen(
 
             Spacer(modifier = Modifier.height(30.dp))
         }
+    }
+
+    // Dialog: Provide PIN or Password (Matching SKEDit)
+    if (isPinDialogOpen) {
+        var tempPin by remember { mutableStateOf(savedPin) }
+        AlertDialog(
+            onDismissRequest = { isPinDialogOpen = false },
+            title = { Text("Device Screen Lock PIN") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Enter your phone screen lock PIN so Postly can automatically unlock your device and send scheduled WhatsApp messages when your screen is locked.",
+                        fontSize = 13.sp,
+                        color = TextSecondary
+                    )
+                    OutlinedTextField(
+                        value = tempPin,
+                        onValueChange = { tempPin = it },
+                        label = { Text("Device Lock PIN") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        prefs.edit().putString("device_screen_pin", tempPin).apply()
+                        savedPin = tempPin
+                        isPinDialogOpen = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandBlue)
+                ) {
+                    Text("Save PIN")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { isPinDialogOpen = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

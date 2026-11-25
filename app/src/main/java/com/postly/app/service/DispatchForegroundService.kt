@@ -1,9 +1,11 @@
 package com.postly.app.service
 
+import android.app.KeyguardManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
@@ -46,10 +48,19 @@ class DispatchForegroundService : Service() {
             // Assign pending task to Accessibility Service
             PostlyAccessibilityService.pendingTask = schedule
 
-            // Launch WhatsApp
-            launchWhatsApp(schedule.recipientPhone, schedule.message)
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val isLocked = keyguardManager.isKeyguardLocked
 
-            // Keep service alive momentarily to let accessibility service complete
+            if (isLocked) {
+                Log.d(TAG, "Screen is locked. Waiting for Accessibility Service to enter PIN...")
+                // Wait for accessibility service to auto-unlock using PIN or SmartLock
+                delay(3000)
+            }
+
+            // Launch targeted WhatsApp chat directly
+            launchTargetedWhatsApp(schedule.recipientPhone, schedule.message, schedule.platform)
+
+            // Keep service alive to allow accessibility service to finish typing & clicking
             delay(15000)
             releaseWakeLock()
             stopSelf()
@@ -62,7 +73,7 @@ class DispatchForegroundService : Service() {
         val notification = NotificationCompat.Builder(this, PostlyApplication.CHANNEL_SERVICE)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle("Postly Automator")
-            .setContentText("Dispatching scheduled WhatsApp message...")
+            .setContentText("Targeting WhatsApp conversation...")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
@@ -70,40 +81,44 @@ class DispatchForegroundService : Service() {
         startForeground(NOTIFICATION_ID, notification)
     }
 
-    private fun launchWhatsApp(phoneNumber: String, message: String) {
+    private fun launchTargetedWhatsApp(phoneNumber: String, message: String, platform: String) {
         try {
             val cleanPhone = phoneNumber.replace("+", "").replace(" ", "").replace("-", "")
+            val targetPkg = if (platform.contains("business", ignoreCase = true)) "com.whatsapp.w4b" else "com.whatsapp"
+
             val intent = if (cleanPhone.isNotEmpty()) {
                 val encodedMsg = URLEncoder.encode(message, "UTF-8")
-                val uri = Uri.parse("https://api.whatsapp.com/send?phone=$cleanPhone&text=$encodedMsg")
+                // Deep link directly targets this exact phone number in WhatsApp
+                val uri = Uri.parse("whatsapp://send?phone=$cleanPhone&text=$encodedMsg")
                 Intent(Intent.ACTION_VIEW, uri).apply {
-                    setPackage("com.whatsapp")
+                    setPackage(targetPkg)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
             } else {
-                packageManager.getLaunchIntentForPackage("com.whatsapp")?.apply {
+                packageManager.getLaunchIntentForPackage(targetPkg)?.apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
             }
 
             if (intent != null) {
                 startActivity(intent)
-                Log.d(TAG, "Launched WhatsApp successfully")
+                Log.d(TAG, "Targeted WhatsApp opened for: $cleanPhone")
             } else {
                 Log.e(TAG, "WhatsApp is not installed on this device")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch WhatsApp", e)
+            Log.e(TAG, "Failed to launch targeted WhatsApp", e)
         }
     }
 
     private fun acquireWakeLock() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        @Suppress("DEPRECATION")
         wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
             "Postly:DispatchWakeLock"
         ).apply {
-            acquire(30000)
+            acquire(45000)
         }
     }
 
