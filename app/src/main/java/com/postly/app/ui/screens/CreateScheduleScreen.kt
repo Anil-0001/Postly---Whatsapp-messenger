@@ -2,16 +2,23 @@ package com.postly.app.ui.screens
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
 import android.provider.ContactsContract
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,9 +28,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.postly.app.data.model.Platform
@@ -45,10 +56,11 @@ fun CreateScheduleScreen(
     onSaveSchedule: (ScheduleEntity) -> Unit
 ) {
     val context = LocalContext.current
+    // Default schedule: 2 minutes in the future, exactly at 30 seconds
     val calendar = remember {
         Calendar.getInstance().apply {
-            add(Calendar.MINUTE, 5)
-            set(Calendar.SECOND, 0)
+            add(Calendar.MINUTE, 2)
+            set(Calendar.SECOND, 30)
             set(Calendar.MILLISECOND, 0)
         }
     }
@@ -62,16 +74,110 @@ fun CreateScheduleScreen(
     var askBeforeSending by remember { mutableStateOf(false) }
     var generateThumbnails by remember { mutableStateOf(false) }
 
+    // Attachment State
+    var attachmentUri by remember { mutableStateOf<String?>(null) }
+    var attachmentType by remember { mutableStateOf<String?>(null) } // IMAGE, VIDEO, AUDIO, DOCUMENT
+    var attachmentName by remember { mutableStateOf<String?>(null) }
+    var attachmentSize by remember { mutableStateOf<String?>(null) }
+
     var isRecipientMenuOpen by remember { mutableStateOf(false) }
     var isManualContactDialogOpen by remember { mutableStateOf(false) }
     var isRepeatMenuOpen by remember { mutableStateOf(false) }
     var isTopMenuOpen by remember { mutableStateOf(false) }
+    var isAttachmentSheetOpen by remember { mutableStateOf(false) }
 
     val dateFormatter = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
     val timeFormatter = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
 
     var displayDate by remember { mutableStateOf(dateFormatter.format(Date(scheduledMillis))) }
     var displayTime by remember { mutableStateOf(timeFormatter.format(Date(scheduledMillis))) }
+
+    // Query file name and human-readable size
+    fun getFileInfo(uri: Uri): Pair<String, String> {
+        var name = "Attachment"
+        var sizeStr = ""
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (cursor.moveToFirst()) {
+                    if (nameIndex != -1) name = cursor.getString(nameIndex) ?: "Attachment"
+                    if (sizeIndex != -1) {
+                        val size = cursor.getLong(sizeIndex)
+                        sizeStr = if (size > 1024 * 1024) {
+                            String.format(Locale.getDefault(), "%.1f MB", size / (1024.0 * 1024.0))
+                        } else {
+                            String.format(Locale.getDefault(), "%.1f KB", size / 1024.0)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            name = uri.lastPathSegment ?: "Attachment"
+        }
+        return Pair(name, sizeStr)
+    }
+
+    // Launchers for various attachment types
+    val imageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {}
+            val (name, size) = getFileInfo(uri)
+            attachmentUri = uri.toString()
+            attachmentType = "IMAGE"
+            attachmentName = name
+            attachmentSize = size
+        }
+    }
+
+    val videoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {}
+            val (name, size) = getFileInfo(uri)
+            attachmentUri = uri.toString()
+            attachmentType = "VIDEO"
+            attachmentName = name
+            attachmentSize = size
+        }
+    }
+
+    val docLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {}
+            val (name, size) = getFileInfo(uri)
+            attachmentUri = uri.toString()
+            attachmentType = "DOCUMENT"
+            attachmentName = name
+            attachmentSize = size
+        }
+    }
+
+    val audioLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {}
+            val (name, size) = getFileInfo(uri)
+            attachmentUri = uri.toString()
+            attachmentType = "AUDIO"
+            attachmentName = name
+            attachmentSize = size
+        }
+    }
 
     // System Phonebook Picker Launcher
     val contactPickerLauncher = rememberLauncherForActivityResult(
@@ -96,6 +202,33 @@ fun CreateScheduleScreen(
             recipientName = capturedName
             recipientPhone = ""
         }
+    }
+
+    // Helper to build ScheduleEntity with strict 30-second timing
+    fun buildScheduleEntity(status: ScheduleStatus): ScheduleEntity {
+        val targetCal = Calendar.getInstance().apply {
+            timeInMillis = scheduledMillis
+            set(Calendar.SECOND, 30)
+            set(Calendar.MILLISECOND, 0)
+        }
+        if (targetCal.timeInMillis <= System.currentTimeMillis()) {
+            targetCal.add(Calendar.MINUTE, 1)
+        }
+        return ScheduleEntity(
+            platform = platform.name,
+            recipientName = recipientName,
+            recipientPhone = recipientPhone,
+            title = title,
+            message = message,
+            scheduledTimeMillis = targetCal.timeInMillis,
+            repeatRule = repeatRule.name,
+            askBeforeSending = askBeforeSending,
+            status = status.name,
+            attachmentUri = attachmentUri,
+            attachmentType = attachmentType,
+            attachmentName = attachmentName,
+            attachmentSize = attachmentSize
+        )
     }
 
     Scaffold(
@@ -134,19 +267,7 @@ fun CreateScheduleScreen(
                                 text = { Text("Save to drafts") },
                                 onClick = {
                                     isTopMenuOpen = false
-                                    onSaveSchedule(
-                                        ScheduleEntity(
-                                            platform = platform.name,
-                                            recipientName = recipientName,
-                                            recipientPhone = recipientPhone,
-                                            title = title,
-                                            message = message,
-                                            scheduledTimeMillis = scheduledMillis,
-                                            repeatRule = repeatRule.name,
-                                            askBeforeSending = askBeforeSending,
-                                            status = ScheduleStatus.DRAFTS.name
-                                        )
-                                    )
+                                    onSaveSchedule(buildScheduleEntity(ScheduleStatus.DRAFTS))
                                 }
                             )
                         }
@@ -164,19 +285,7 @@ fun CreateScheduleScreen(
                 Button(
                     onClick = {
                         if (recipientPhone.isNotBlank() || recipientName.isNotBlank()) {
-                            onSaveSchedule(
-                                ScheduleEntity(
-                                    platform = platform.name,
-                                    recipientName = recipientName,
-                                    recipientPhone = recipientPhone,
-                                    title = title,
-                                    message = message,
-                                    scheduledTimeMillis = scheduledMillis,
-                                    repeatRule = repeatRule.name,
-                                    askBeforeSending = askBeforeSending,
-                                    status = ScheduleStatus.PENDING.name
-                                )
-                            )
+                            onSaveSchedule(buildScheduleEntity(ScheduleStatus.PENDING))
                         }
                     },
                     modifier = Modifier
@@ -259,13 +368,11 @@ fun CreateScheduleScreen(
                                     expanded = isRecipientMenuOpen,
                                     onDismissRequest = { isRecipientMenuOpen = false }
                                 ) {
-                                    // WhatsApp: Opens WhatsApp directly to pick any chat/group
                                     DropdownMenuItem(
                                         text = { Text("Whatsapp") },
                                         leadingIcon = { Icon(Icons.Default.Send, null, Modifier.size(18.dp)) },
                                         onClick = {
                                             isRecipientMenuOpen = false
-                                            // Enable Accessibility contact picking mode
                                             PostlyAccessibilityService.isPickingContact = true
                                             val launchIntent = context.packageManager.getLaunchIntentForPackage("com.whatsapp")
                                             if (launchIntent != null) {
@@ -461,24 +568,261 @@ fun CreateScheduleScreen(
                 Text("Generate thumbnails from links", fontSize = 14.sp, color = TextPrimary)
             }
 
-            // Attachments
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Attachments Section
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
-                Text("Attachments", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = {},
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(BrandBlue, RoundedCornerShape(8.dp))
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.AttachFile, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Text("Attachments", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { isAttachmentSheetOpen = true },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(BrandBlue, RoundedCornerShape(8.dp))
+                            ) {
+                                Icon(Icons.Default.AttachFile, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (attachmentUri != null) "1/1" else "0/1", fontSize = 13.sp, color = TextSecondary)
+                        }
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("0/0", fontSize = 13.sp, color = TextSecondary)
+
+                    // Attachment Preview Container
+                    if (attachmentUri != null) {
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        if (attachmentType == "IMAGE") {
+                            // Rich Image Preview with Edit & Delete Controls
+                            val bitmap = remember(attachmentUri) {
+                                try {
+                                    val uri = Uri.parse(attachmentUri)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                        val source = ImageDecoder.createSource(context.contentResolver, uri)
+                                        ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                                            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                                            val maxDim = 800
+                                            val width = info.size.width
+                                            val height = info.size.height
+                                            if (width > maxDim || height > maxDim) {
+                                                val scale = maxDim.toFloat() / maxOf(width, height)
+                                                decoder.setTargetSize((width * scale).toInt(), (height * scale).toInt())
+                                            }
+                                        }.asImageBitmap()
+                                    } else {
+                                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                                            BitmapFactory.decodeStream(stream)?.asImageBitmap()
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = BackgroundLight),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(180.dp)
+                                ) {
+                                    if (bitmap != null) {
+                                        Image(
+                                            bitmap = bitmap,
+                                            contentDescription = "Selected Gallery Image",
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(12.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(BrandBlueLight),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(Icons.Default.Image, null, tint = BrandBlue, modifier = Modifier.size(48.dp))
+                                        }
+                                    }
+
+                                    // Top Action Buttons: Edit (Change) & Delete (Remove)
+                                    Row(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        // Edit / Replace Image Button
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.White.copy(alpha = 0.9f),
+                                            shadowElevation = 3.dp,
+                                            modifier = Modifier
+                                                .size(34.dp)
+                                                .clickable { imageLauncher.launch("image/*") }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(Icons.Default.Edit, contentDescription = "Edit Image", tint = BrandBlue, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+
+                                        // Delete Image Button
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.White.copy(alpha = 0.9f),
+                                            shadowElevation = 3.dp,
+                                            modifier = Modifier
+                                                .size(34.dp)
+                                                .clickable {
+                                                    attachmentUri = null
+                                                    attachmentType = null
+                                                    attachmentName = null
+                                                    attachmentSize = null
+                                                }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(Icons.Default.Delete, contentDescription = "Delete Image", tint = DangerRed, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                    }
+
+                                    // Bottom Info Pill: Name and Size
+                                    Surface(
+                                        shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
+                                        color = Color.Black.copy(alpha = 0.65f),
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = attachmentName ?: "Gallery Image",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (!attachmentSize.isNullOrBlank()) {
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = attachmentSize!!,
+                                                    color = Color.White.copy(alpha = 0.8f),
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // File / Document / Audio / Video Card
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = BrandBlueLight,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = when (attachmentType) {
+                                                "DOCUMENT" -> Color(0xFF5F66CD)
+                                                "AUDIO" -> Color(0xFFE66624)
+                                                "VIDEO" -> Color(0xFFE91E63)
+                                                else -> BrandBlue
+                                            },
+                                            modifier = Modifier.size(40.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = when (attachmentType) {
+                                                        "DOCUMENT" -> Icons.Default.InsertDriveFile
+                                                        "AUDIO" -> Icons.Default.Headphones
+                                                        "VIDEO" -> Icons.Default.Videocam
+                                                        else -> Icons.Default.AttachFile
+                                                    },
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.width(10.dp))
+
+                                        Column {
+                                            Text(
+                                                text = attachmentName ?: "File",
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 14.sp,
+                                                color = TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${attachmentType ?: "File"} • ${attachmentSize ?: "Unknown size"}",
+                                                fontSize = 12.sp,
+                                                color = TextSecondary
+                                            )
+                                        }
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        // Edit / Replace Button
+                                        IconButton(
+                                            onClick = {
+                                                when (attachmentType) {
+                                                    "DOCUMENT" -> docLauncher.launch("*/*")
+                                                    "AUDIO" -> audioLauncher.launch("audio/*")
+                                                    "VIDEO" -> videoLauncher.launch("video/*")
+                                                    else -> docLauncher.launch("*/*")
+                                                }
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Edit, contentDescription = "Edit File", tint = BrandBlue, modifier = Modifier.size(18.dp))
+                                        }
+
+                                        // Delete Button
+                                        IconButton(
+                                            onClick = {
+                                                attachmentUri = null
+                                                attachmentType = null
+                                                attachmentName = null
+                                                attachmentSize = null
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete File", tint = DangerRed, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -521,7 +865,7 @@ fun CreateScheduleScreen(
                                             calendar.set(Calendar.YEAR, y)
                                             calendar.set(Calendar.MONTH, m)
                                             calendar.set(Calendar.DAY_OF_MONTH, d)
-                                            calendar.set(Calendar.SECOND, 0)
+                                            calendar.set(Calendar.SECOND, 30) // Strictly at 30 seconds
                                             calendar.set(Calendar.MILLISECOND, 0)
                                             scheduledMillis = calendar.timeInMillis
                                             displayDate = dateFormatter.format(Date(scheduledMillis))
@@ -544,7 +888,7 @@ fun CreateScheduleScreen(
                             }
                         }
 
-                        // Time Box
+                        // Time Box (Enforces 30-second target trigger)
                         OutlinedCard(
                             modifier = Modifier
                                 .weight(1f)
@@ -554,7 +898,7 @@ fun CreateScheduleScreen(
                                         { _, h, min ->
                                             calendar.set(Calendar.HOUR_OF_DAY, h)
                                             calendar.set(Calendar.MINUTE, min)
-                                            calendar.set(Calendar.SECOND, 0)
+                                            calendar.set(Calendar.SECOND, 30) // Strictly at 30 seconds
                                             calendar.set(Calendar.MILLISECOND, 0)
                                             scheduledMillis = calendar.timeInMillis
                                             displayTime = timeFormatter.format(Date(scheduledMillis))
@@ -677,6 +1021,82 @@ fun CreateScheduleScreen(
         }
     }
 
+    // WhatsApp-Style Attachments Modal BottomSheet
+    if (isAttachmentSheetOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { isAttachmentSheetOpen = false },
+            containerColor = Color.White,
+            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Add Attachment",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // WhatsApp-like grid: Gallery, Document, Video, Audio
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    // 1. Gallery (Images / Photos)
+                    AttachmentOptionItem(
+                        icon = Icons.Default.Image,
+                        label = "Gallery",
+                        color = Color(0xFFAC44CF),
+                        onClick = {
+                            isAttachmentSheetOpen = false
+                            imageLauncher.launch("image/*")
+                        }
+                    )
+
+                    // 2. Document (PDFs, Word, Files)
+                    AttachmentOptionItem(
+                        icon = Icons.Default.InsertDriveFile,
+                        label = "Document",
+                        color = Color(0xFF5F66CD),
+                        onClick = {
+                            isAttachmentSheetOpen = false
+                            docLauncher.launch("*/*")
+                        }
+                    )
+
+                    // 3. Audio (Music, Voice)
+                    AttachmentOptionItem(
+                        icon = Icons.Default.Headphones,
+                        label = "Audio",
+                        color = Color(0xFFE66624),
+                        onClick = {
+                            isAttachmentSheetOpen = false
+                            audioLauncher.launch("audio/*")
+                        }
+                    )
+
+                    // 4. Video (Videos from storage)
+                    AttachmentOptionItem(
+                        icon = Icons.Default.Videocam,
+                        label = "Video",
+                        color = Color(0xFFE91E63),
+                        onClick = {
+                            isAttachmentSheetOpen = false
+                            videoLauncher.launch("video/*")
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(30.dp))
+            }
+        }
+    }
+
     // Manual Contact Dialog (Only if user chooses "Enter Manually")
     if (isManualContactDialogOpen) {
         var tempName by remember { mutableStateOf(recipientName) }
@@ -718,6 +1138,39 @@ fun CreateScheduleScreen(
                     Text("Cancel")
                 }
             }
+        )
+    }
+}
+
+@Composable
+fun AttachmentOptionItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable { onClick() }
+            .padding(8.dp)
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = color,
+            modifier = Modifier.size(56.dp),
+            shadowElevation = 2.dp
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(28.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = TextPrimary
         )
     }
 }

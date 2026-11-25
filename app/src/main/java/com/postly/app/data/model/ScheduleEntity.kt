@@ -49,5 +49,9 @@ data class ScheduleEntity(
     val status: String = ScheduleStatus.PENDING.name,
     val createdAtMillis: Long = System.currentTimeMillis(),
     val executedAtMillis: Long? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val attachmentUri: String? = null,
+    val attachmentType: String? = null,
+    val attachmentName: String? = null,
+    val attachmentSize: String? = null
 )

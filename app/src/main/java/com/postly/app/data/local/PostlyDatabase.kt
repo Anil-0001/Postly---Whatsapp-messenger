@@ -6,7 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.postly.app.data.model.ScheduleEntity
 
-@Database(entities = [ScheduleEntity::class], version = 1, exportSchema = false)
+@Database(entities = [ScheduleEntity::class], version = 2, exportSchema = false)
 abstract class PostlyDatabase : RoomDatabase() {
     abstract fun scheduleDao(): ScheduleDao
 

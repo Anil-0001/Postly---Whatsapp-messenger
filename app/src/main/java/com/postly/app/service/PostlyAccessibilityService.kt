@@ -166,7 +166,7 @@ class PostlyAccessibilityService : AccessibilityService() {
                 if (!hasPinButtons && passwordField == null) {
                     Log.d(TAG, "Swiping up on OnePlus lockscreen to reveal keypad...")
                     performSwipeUpGesture()
-                    delay(800)
+                    delay(1000)
                 }
 
                 val currentRoot = rootInActiveWindow ?: rootNode
@@ -180,25 +180,24 @@ class PostlyAccessibilityService : AccessibilityService() {
                     delay(300)
                     findAndClickNode(currentRoot, listOf("com.android.systemui:id/key_enter", "OK", "Done", "Enter"))
                 } else {
-                    // Type each digit in saved PIN
+                    // Type each digit in saved PIN with high precision
                     for (digit in savedPin) {
                         val digitStr = digit.toString()
-                        val digitNode = findPinpadDigitNode(currentRoot, digitStr)
+                        val freshRoot = rootInActiveWindow ?: currentRoot
+                        val digitNode = findPinpadDigitNode(freshRoot, digitStr)
                         var tapped = false
 
                         if (digitNode != null) {
                             val bounds = Rect()
                             digitNode.getBoundsInScreen(bounds)
-                            if (bounds.centerX() > 0 && bounds.centerY() > 0) {
+                            if (bounds.width() in 80..450 && bounds.height() in 80..450 && bounds.centerY() > 1100) {
                                 Log.d(TAG, "Tapping node bounds for digit $digitStr: (${bounds.centerX()}, ${bounds.centerY()})")
                                 clickAt(bounds.centerX().toFloat(), bounds.centerY().toFloat())
                                 tapped = true
-                            } else {
-                                tapped = digitNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                             }
                         }
 
-                        // If accessibility node wasn't found or clickable (common on OxygenOS 14 keyguard security)
+                        // Fallback: Tap calibrated OnePlus Keypad coordinates
                         if (!tapped) {
                             val coords = getPinpadCoordinates(digit, width, height)
                             if (coords != null) {
@@ -206,11 +205,10 @@ class PostlyAccessibilityService : AccessibilityService() {
                                 clickAt(coords.first, coords.second)
                             }
                         }
-                        delay(250)
+                        delay(350)
                     }
 
-                    // Note: On OnePlus OxygenOS 14, standard 4-digit/6-digit PIN auto-submits when the last digit is typed.
-                    // DO NOT tap any fallback enter coordinate as that clicks the backspace/delete button!
+                    // On OnePlus OxygenOS 14, 4-digit PIN auto-submits when 4th digit is tapped
                 }
 
                 delay(1200)
@@ -227,11 +225,11 @@ class PostlyAccessibilityService : AccessibilityService() {
     }
 
     private fun getPinpadCoordinates(digit: Char, width: Int, height: Int): Pair<Float, Float>? {
-        val col1 = 240f
-        val col2 = 540f // center on 1080
-        val col3 = 840f
-
         // OnePlus Nord CE 2 Lite (OxygenOS 14) Keypad Layout on 1080x2412:
+        val col1 = 270f
+        val col2 = 540f // center on 1080
+        val col3 = 810f
+
         val row1 = 1380f
         val row2 = 1580f
         val row3 = 1780f
@@ -637,33 +635,23 @@ class PostlyAccessibilityService : AccessibilityService() {
     private fun findPinpadDigitNode(rootNode: AccessibilityNodeInfo, digit: String): AccessibilityNodeInfo? {
         val bounds = Rect()
 
-        // 1. By ID (strictly in keypad area y > 1100)
+        // Match strictly by Keyguard Keypad IDs
         val idList = listOf(
             "com.android.systemui:id/key$digit",
             "com.android.systemui:id/button$digit",
             "com.android.systemui:id/digit_text",
             "com.android.systemui:id/digit_$digit",
-            "com.android.systemui:id/key_$digit"
+            "com.android.systemui:id/key_$digit",
+            "com.oplus.securitykeyboard:id/key_$digit"
         )
         for (id in idList) {
             val nodes = rootNode.findAccessibilityNodeInfosByViewId(id)
             for (node in nodes) {
                 node.getBoundsInScreen(bounds)
-                if (bounds.centerY() > 1100) {
+                if (bounds.centerY() > 1100 && bounds.width() in 80..450 && bounds.height() in 80..450) {
                     if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
                         return node
                     }
-                }
-            }
-        }
-
-        // 2. By Text or Description (Strictly in lower half y > 1100 to avoid Clock / Date widgets)
-        val textNodes = rootNode.findAccessibilityNodeInfosByText(digit)
-        for (node in textNodes) {
-            node.getBoundsInScreen(bounds)
-            if (bounds.centerY() > 1100) {
-                if (node.text?.toString() == digit || node.contentDescription?.toString() == digit) {
-                    return node
                 }
             }
         }
@@ -709,7 +697,7 @@ class PostlyAccessibilityService : AccessibilityService() {
     private fun clickAt(x: Float, y: Float) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             val path = Path().apply { moveTo(x, y) }
-            val stroke = GestureDescription.StrokeDescription(path, 0, 80)
+            val stroke = GestureDescription.StrokeDescription(path, 0, 100)
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
             dispatchGesture(gesture, null, null)
         }
@@ -729,7 +717,28 @@ class PostlyAccessibilityService : AccessibilityService() {
             val cleanPhone = task.recipientPhone.replace("+", "").replace(" ", "").replace("-", "")
             val targetPkg = if (task.platform.contains("business", ignoreCase = true)) "com.whatsapp.w4b" else "com.whatsapp"
 
-            val intent = if (cleanPhone.isNotEmpty()) {
+            val intent = if (!task.attachmentUri.isNullOrBlank()) {
+                val mediaUri = Uri.parse(task.attachmentUri)
+                val mimeType = when (task.attachmentType) {
+                    "IMAGE" -> "image/*"
+                    "VIDEO" -> "video/*"
+                    "AUDIO" -> "audio/*"
+                    else -> "*/*"
+                }
+                Intent(Intent.ACTION_SEND).apply {
+                    setPackage(targetPkg)
+                    type = mimeType
+                    putExtra(Intent.EXTRA_STREAM, mediaUri)
+                    if (task.message.isNotBlank()) {
+                        putExtra(Intent.EXTRA_TEXT, task.message)
+                    }
+                    if (cleanPhone.isNotEmpty()) {
+                        putExtra("jid", "$cleanPhone@s.whatsapp.net")
+                    }
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+            } else if (cleanPhone.isNotEmpty()) {
                 val encodedMsg = URLEncoder.encode(task.message, "UTF-8")
                 val uri = Uri.parse("whatsapp://send?phone=$cleanPhone&text=$encodedMsg")
                 Intent(Intent.ACTION_VIEW, uri).apply {
@@ -745,7 +754,7 @@ class PostlyAccessibilityService : AccessibilityService() {
             if (intent != null) {
                 currentStep = AutomationStep.START
                 startActivity(intent)
-                Log.d(TAG, "Launched WhatsApp. State initialized to START.")
+                Log.d(TAG, "Launched WhatsApp (attachment: ${!task.attachmentUri.isNullOrBlank()}). State initialized to START.")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to launch WhatsApp", e)

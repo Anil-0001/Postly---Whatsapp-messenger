@@ -375,6 +375,41 @@ fun ScheduleCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+
+            if (!schedule.attachmentUri.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = BrandBlueLight,
+                    modifier = Modifier.wrapContentWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = when (schedule.attachmentType) {
+                                "IMAGE" -> Icons.Default.Image
+                                "VIDEO" -> Icons.Default.Videocam
+                                "AUDIO" -> Icons.Default.Headphones
+                                else -> Icons.Default.AttachFile
+                            },
+                            contentDescription = null,
+                            tint = BrandBlue,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = schedule.attachmentName ?: "Attachment",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = BrandBlueDark,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
         }
     }
 }
