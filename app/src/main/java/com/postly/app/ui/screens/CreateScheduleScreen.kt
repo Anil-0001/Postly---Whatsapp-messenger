@@ -120,16 +120,35 @@ fun CreateScheduleScreen(
         return Pair(name, sizeStr)
     }
 
+    // Helper to copy selected attachment into app's persistent storage so WhatsApp can access it via FileProvider
+    fun persistAttachmentLocally(uri: Uri, originalName: String): Uri {
+        return try {
+            val attachmentsDir = java.io.File(context.filesDir, "attachments").apply { mkdirs() }
+            val extension = if (originalName.contains(".")) originalName.substringAfterLast(".") else "jpg"
+            val destFile = java.io.File(attachmentsDir, "postly_${System.currentTimeMillis()}.$extension")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                destFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                destFile
+            )
+        } catch (e: Exception) {
+            uri
+        }
+    }
+
     // Launchers for various attachment types
     val imageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {}
             val (name, size) = getFileInfo(uri)
-            attachmentUri = uri.toString()
+            val permanentUri = persistAttachmentLocally(uri, name)
+            attachmentUri = permanentUri.toString()
             attachmentType = "IMAGE"
             attachmentName = name
             attachmentSize = size
@@ -140,11 +159,9 @@ fun CreateScheduleScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {}
             val (name, size) = getFileInfo(uri)
-            attachmentUri = uri.toString()
+            val permanentUri = persistAttachmentLocally(uri, name)
+            attachmentUri = permanentUri.toString()
             attachmentType = "VIDEO"
             attachmentName = name
             attachmentSize = size
@@ -155,11 +172,9 @@ fun CreateScheduleScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {}
             val (name, size) = getFileInfo(uri)
-            attachmentUri = uri.toString()
+            val permanentUri = persistAttachmentLocally(uri, name)
+            attachmentUri = permanentUri.toString()
             attachmentType = "DOCUMENT"
             attachmentName = name
             attachmentSize = size
@@ -170,11 +185,9 @@ fun CreateScheduleScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            try {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {}
             val (name, size) = getFileInfo(uri)
-            attachmentUri = uri.toString()
+            val permanentUri = persistAttachmentLocally(uri, name)
+            attachmentUri = permanentUri.toString()
             attachmentType = "AUDIO"
             attachmentName = name
             attachmentSize = size
@@ -298,7 +311,7 @@ fun CreateScheduleScreen(
                         .padding(16.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
-                    enabled = message.isNotBlank() && (recipientPhone.isNotBlank() || recipientName.isNotBlank())
+                    enabled = (message.isNotBlank() || !attachmentUri.isNullOrBlank()) && (recipientPhone.isNotBlank() || recipientName.isNotBlank())
                 ) {
                     Text(
                         text = "Schedule Message",

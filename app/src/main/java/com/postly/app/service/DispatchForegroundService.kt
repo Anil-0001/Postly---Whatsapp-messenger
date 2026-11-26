@@ -2,6 +2,7 @@ package com.postly.app.service
 
 import android.app.KeyguardManager
 import android.app.Service
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -12,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.postly.app.PostlyApplication
 import com.postly.app.UnlockScreenActivity
+import com.postly.app.data.model.ScheduleEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,11 +70,18 @@ class DispatchForegroundService : Service() {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                 }
                 startActivity(unlockIntent)
-                delay(2500) // Allow Accessibility Service time to swipe and enter PIN
+                // Wait for PostlyAccessibilityService to swipe and enter PIN (up to 4.5 seconds)
+                for (i in 1..9) {
+                    delay(500)
+                    if (!keyguardManager.isKeyguardLocked) {
+                        Log.d(TAG, "Keyguard unlocked successfully")
+                        break
+                    }
+                }
             }
 
             // Launch targeted WhatsApp
-            launchTargetedWhatsApp(schedule.recipientPhone, schedule.message, schedule.platform)
+            launchTargetedWhatsApp(schedule)
 
             // Keep service alive to allow accessibility service to finish typing & clicking
             delay(20000)
@@ -108,14 +117,46 @@ class DispatchForegroundService : Service() {
         startForeground(NOTIFICATION_ID, notification)
     }
 
-    private fun launchTargetedWhatsApp(phoneNumber: String, message: String, platform: String) {
+    private fun launchTargetedWhatsApp(schedule: ScheduleEntity) {
         try {
-            val cleanPhone = phoneNumber.replace("+", "").replace(" ", "").replace("-", "")
-            val targetPkg = if (platform.contains("business", ignoreCase = true)) "com.whatsapp.w4b" else "com.whatsapp"
+            val cleanPhone = schedule.recipientPhone.replace("+", "").replace(" ", "").replace("-", "")
+            val targetPkg = if (schedule.platform.contains("business", ignoreCase = true)) "com.whatsapp.w4b" else "com.whatsapp"
 
-            val intent = if (cleanPhone.isNotEmpty()) {
-                val encodedMsg = URLEncoder.encode(message, "UTF-8")
-                val uri = Uri.parse("whatsapp://send?phone=$cleanPhone&text=$encodedMsg")
+            val intent = if (!schedule.attachmentUri.isNullOrBlank()) {
+                val mediaUri = Uri.parse(schedule.attachmentUri)
+                val mimeType = when (schedule.attachmentType) {
+                    "IMAGE" -> "image/*"
+                    "VIDEO" -> "video/*"
+                    "AUDIO" -> "audio/*"
+                    else -> "*/*"
+                }
+
+                try {
+                    grantUriPermission(targetPkg, mediaUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) {
+                    Log.w(TAG, "grantUriPermission failed: ${e.message}")
+                }
+
+                val fullPhone = if (cleanPhone.length == 10 && (cleanPhone.startsWith("6") || cleanPhone.startsWith("7") || cleanPhone.startsWith("8") || cleanPhone.startsWith("9"))) "91$cleanPhone" else cleanPhone
+
+                Intent(Intent.ACTION_SEND).apply {
+                    setPackage(targetPkg)
+                    type = mimeType
+                    putExtra(Intent.EXTRA_STREAM, mediaUri)
+                    clipData = ClipData.newUri(contentResolver, "Attachment", mediaUri)
+                    if (schedule.message.isNotBlank()) {
+                        putExtra(Intent.EXTRA_TEXT, schedule.message)
+                    }
+                    if (fullPhone.isNotEmpty()) {
+                        putExtra("jid", "$fullPhone@s.whatsapp.net")
+                    }
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+            } else if (cleanPhone.isNotEmpty()) {
+                val fullPhone = if (cleanPhone.length == 10 && (cleanPhone.startsWith("6") || cleanPhone.startsWith("7") || cleanPhone.startsWith("8") || cleanPhone.startsWith("9"))) "91$cleanPhone" else cleanPhone
+                val encodedMsg = URLEncoder.encode(schedule.message, "UTF-8")
+                val uri = Uri.parse("whatsapp://send?phone=$fullPhone&text=$encodedMsg")
                 Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(targetPkg)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -128,7 +169,7 @@ class DispatchForegroundService : Service() {
 
             if (intent != null) {
                 startActivity(intent)
-                Log.d(TAG, "Targeted WhatsApp opened for: $cleanPhone")
+                Log.d(TAG, "Targeted WhatsApp launched (with attachment: ${!schedule.attachmentUri.isNullOrBlank()})")
             } else {
                 Log.e(TAG, "WhatsApp is not installed on this device")
             }

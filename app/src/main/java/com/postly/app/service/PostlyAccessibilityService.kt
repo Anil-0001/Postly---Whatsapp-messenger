@@ -12,7 +12,9 @@ import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.DisplayMetrics
 import android.util.Log
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.postly.app.MainActivity
@@ -68,7 +70,11 @@ class PostlyAccessibilityService : AccessibilityService() {
         val current = pendingTask
         if (current != null && (packageName == "com.whatsapp" || packageName == "com.whatsapp.w4b")) {
             if (!isExecutingAutomation) {
-                startWhatsAppAutomation(current)
+                if (!current.attachmentUri.isNullOrBlank()) {
+                    startWhatsAppMediaAutomation(current)
+                } else {
+                    startWhatsAppAutomation(current)
+                }
             }
         }
     }
@@ -155,8 +161,7 @@ class PostlyAccessibilityService : AccessibilityService() {
             try {
                 Log.d(TAG, "Executing OnePlus lockscreen unlock...")
 
-                val width = resources.displayMetrics.widthPixels
-                val height = resources.displayMetrics.heightPixels
+                val (width, height) = getRealScreenSize(this@PostlyAccessibilityService)
 
                 // Check if PIN buttons or password field are already visible
                 var hasPinButtons = findPinpadDigitNode(rootNode, "1") != null
@@ -209,6 +214,20 @@ class PostlyAccessibilityService : AccessibilityService() {
                     }
 
                     // On OnePlus OxygenOS 14, 4-digit PIN auto-submits when 4th digit is tapped
+                    // For devices requiring OK or enter, tap Enter if still locked
+                    delay(600)
+                    val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                    if (km.isKeyguardLocked) {
+                        Log.d(TAG, "Keyguard still locked after digits, attempting Enter/OK tap...")
+                        val afterRoot = rootInActiveWindow
+                        val enterClicked = afterRoot != null && findAndClickNode(afterRoot, listOf("com.android.systemui:id/key_enter", "OK", "Done", "Enter", "✓"))
+                        if (!enterClicked) {
+                            val enterCoords = getPinpadCoordinates('E', width, height)
+                            if (enterCoords != null) {
+                                clickAt(enterCoords.first, enterCoords.second)
+                            }
+                        }
+                    }
                 }
 
                 delay(1200)
@@ -224,20 +243,57 @@ class PostlyAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun getRealScreenSize(context: Context): Pair<Int, Int> {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (wm != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bounds = wm.maximumWindowMetrics.bounds
+                return Pair(bounds.width(), bounds.height())
+            } else {
+                @Suppress("DEPRECATION")
+                val display = wm.defaultDisplay
+                val realMetrics = DisplayMetrics()
+                @Suppress("DEPRECATION")
+                display.getRealMetrics(realMetrics)
+                return Pair(realMetrics.widthPixels, realMetrics.heightPixels)
+            }
+        }
+        return Pair(context.resources.displayMetrics.widthPixels, context.resources.displayMetrics.heightPixels)
+    }
+
     private fun getPinpadCoordinates(digit: Char, width: Int, height: Int): Pair<Float, Float>? {
-        val w = width.toFloat()
-        val h = height.toFloat()
+        val col1: Float
+        val col2: Float
+        val col3: Float
+        val row1: Float
+        val row2: Float
+        val row3: Float
+        val row4: Float
 
-        // Universal 3-column PIN pad grid responsive to all screen resolutions & brands
-        // (Xiaomi/Redmi/Poco, Samsung, OnePlus, Oppo, Vivo, Realme, Motorola, Google Pixel)
-        val col1 = w * 0.25f // Left column (1, 4, 7)
-        val col2 = w * 0.50f // Center column (2, 5, 8, 0)
-        val col3 = w * 0.75f // Right column (3, 6, 9)
+        if (width == 1080) {
+            // Calibrated OnePlus Nord CE 2 Lite (OxygenOS 14) Keypad Layout on 1080x2412
+            col1 = 270f
+            col2 = 540f // center on 1080
+            col3 = 810f
 
-        val row1 = h * 0.572f // Row 1 (1, 2, 3)
-        val row2 = h * 0.655f // Row 2 (4, 5, 6)
-        val row3 = h * 0.738f // Row 3 (7, 8, 9)
-        val row4 = h * 0.821f // Row 4 (0)
+            row1 = 1380f
+            row2 = 1580f
+            row3 = 1780f
+            row4 = 1980f
+        } else {
+            // Scaled relative to the 1080x2412 baseline for other screen resolutions
+            val scaleX = width / 1080f
+            val scaleY = height / 2412f
+
+            col1 = 270f * scaleX
+            col2 = 540f * scaleX
+            col3 = 810f * scaleX
+
+            row1 = 1380f * scaleY
+            row2 = 1580f * scaleY
+            row3 = 1780f * scaleY
+            row4 = 1980f * scaleY
+        }
 
         return when (digit) {
             '1' -> Pair(col1, row1)
@@ -250,17 +306,17 @@ class PostlyAccessibilityService : AccessibilityService() {
             '8' -> Pair(col2, row3)
             '9' -> Pair(col3, row3)
             '0' -> Pair(col2, row4)
+            'E', 'e' -> Pair(col3, row4)
             else -> null
         }
     }
 
     private fun performSwipeUpGesture() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            val width = resources.displayMetrics.widthPixels.toFloat()
-            val height = resources.displayMetrics.heightPixels.toFloat()
-            val startX = width * 0.5f
-            val startY = height * 0.85f
-            val endY = height * 0.20f
+            val (realWidth, realHeight) = getRealScreenSize(this)
+            val startX = if (realWidth > 0) realWidth / 2f else 540f
+            val startY = if (realHeight > 0) realHeight * 0.88f else 2100f
+            val endY = if (realHeight > 0) realHeight * 0.15f else 400f
 
             val swipePath = Path().apply {
                 moveTo(startX, startY)
@@ -397,6 +453,255 @@ class PostlyAccessibilityService : AccessibilityService() {
                 isExecutingAutomation = false
             }
         }
+    }
+
+    /**
+     * MEDIA AUTOMATION FOR WHATSAPP
+     * Handles images, videos, audio, and documents:
+     * 1. Detects whether WhatsApp opened directly into Media Preview or into Contact Picker / Forward screen
+     * 2. If Contact Picker: searches recipient, selects contact, and clicks green FAB forward arrow
+     * 3. On Media Preview: ensures caption is present and clicks green Send FAB button
+     * 4. Marks schedule as DONE and returns cleanly
+     */
+    private fun startWhatsAppMediaAutomation(task: ScheduleEntity) {
+        if (isExecutingAutomation) return
+        isExecutingAutomation = true
+
+        serviceScope.launch {
+            try {
+                Log.d(TAG, "Starting WhatsApp Media Automation for attachment: ${task.attachmentUri}")
+                delay(1200) // Allow WhatsApp UI to transition and render
+
+                val (realWidth, realHeight) = getRealScreenSize(this@PostlyAccessibilityService)
+                val widthF = if (realWidth > 0) realWidth.toFloat() else 1080f
+                val heightF = if (realHeight > 0) realHeight.toFloat() else 2412f
+                val cleanPhone = task.recipientPhone.replace("+", "").replace(" ", "").replace("-", "")
+
+                // Step 1: Check if WhatsApp opened Contact Picker (e.g. cleanPhone empty or forward list)
+                val initialRoot = rootInActiveWindow
+                val isContactPicker = initialRoot != null && (
+                    findSearchButton(initialRoot) != null ||
+                    !initialRoot.findAccessibilityNodeInfosByViewId("com.whatsapp:id/contactpicker_row_name").isNullOrEmpty() ||
+                    !initialRoot.findAccessibilityNodeInfosByViewId("com.whatsapp:id/search_src_text").isNullOrEmpty()
+                )
+
+                if (isContactPicker && task.recipientName.isNotEmpty()) {
+                    Log.d(TAG, "Media dispatch: Contact picker detected, searching for ${task.recipientName}...")
+                    val contactSelected = searchAndSelectShareContact(task.recipientName)
+                    if (contactSelected) {
+                        delay(600)
+                        // Click the green FAB button to proceed to Media Preview
+                        var fabClicked = false
+                        for (attempt in 1..5) {
+                            val freshRoot = rootInActiveWindow
+                            if (freshRoot != null) {
+                                val fab = findMediaForwardFab(freshRoot)
+                                if (fab != null) {
+                                    Log.d(TAG, "Found Media Forward FAB, clicking (attempt $attempt)...")
+                                    val rect = Rect()
+                                    fab.getBoundsInScreen(rect)
+                                    fabClicked = fab.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                    if (!fabClicked && rect.centerX() > 0) {
+                                        clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                                        fabClicked = true
+                                    }
+                                    if (fabClicked) break
+                                }
+                            }
+                            delay(300)
+                        }
+
+                        if (!fabClicked) {
+                            val fallbackX = widthF - 110f
+                            val fallbackY = heightF - 130f
+                            Log.d(TAG, "Fallback clicking Forward FAB at ($fallbackX, $fallbackY)")
+                            clickAt(fallbackX, fallbackY)
+                        }
+                        delay(1200) // Wait for Media Preview screen to open
+                    }
+                }
+
+                // Step 2: Now we are on WhatsApp Media Preview Screen (or Chat)
+                // If message caption was not set, try setting it in caption EditText if present
+                if (task.message.isNotBlank()) {
+                    val previewRoot = rootInActiveWindow
+                    if (previewRoot != null) {
+                        val captionEntry = findCaptionEntryNode(previewRoot)
+                        if (captionEntry != null && captionEntry.text.isNullOrBlank()) {
+                            Log.d(TAG, "Caption entry found empty, typing caption...")
+                            val args = Bundle().apply {
+                                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, task.message)
+                            }
+                            captionEntry.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                            delay(400)
+                        }
+                    }
+                }
+
+                // Step 3: Find and click green Send button on Media Preview screen
+                var sendClicked = false
+                for (attempt in 1..8) {
+                    val freshRoot = rootInActiveWindow
+                    if (freshRoot != null) {
+                        val sendBtn = findWhatsAppSendButton(freshRoot)
+                        if (sendBtn != null) {
+                            Log.d(TAG, "Found WhatsApp Media Send button! Clicking (attempt $attempt)...")
+                            val rect = Rect()
+                            sendBtn.getBoundsInScreen(rect)
+                            sendClicked = sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            if (!sendClicked && rect.centerX() > 0) {
+                                clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                                sendClicked = true
+                            }
+                            if (sendClicked) break
+                        }
+                    }
+                    delay(300)
+                }
+
+                // Step 4: Fallback coordinate click for WhatsApp Send button on Media Preview screen
+                if (!sendClicked) {
+                    val fallbackX = widthF - 95f
+                    val fallbackY = heightF - 120f
+                    Log.d(TAG, "Fallback clicking Media Send button at ($fallbackX, $fallbackY)")
+                    clickAt(fallbackX, fallbackY)
+                    sendClicked = true
+                }
+
+                // Step 5: Mark task DONE in database and re-arm if recurring
+                withContext(Dispatchers.IO) {
+                    val db = (applicationContext as PostlyApplication).database
+                    db.scheduleDao().markDone(task.id, System.currentTimeMillis())
+                    AlarmScheduler.handleRecurringSchedule(applicationContext, task)
+                }
+
+                pendingTask = null
+                Log.d(TAG, "WhatsApp media message successfully sent! Task marked DONE.")
+
+                delay(1500)
+                performGlobalAction(GLOBAL_ACTION_BACK)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in WhatsApp media automation", e)
+                RetryManager.handleFailure(applicationContext, task, "Media automation error: ${e.message ?: "Unknown"}")
+                pendingTask = null
+            } finally {
+                isExecutingAutomation = false
+            }
+        }
+    }
+
+    private suspend fun searchAndSelectShareContact(targetName: String): Boolean {
+        val cleanName = targetName.trim()
+        Log.d(TAG, "Searching for contact in share screen: $cleanName")
+
+        var searchClicked = false
+        for (i in 1..6) {
+            val root = rootInActiveWindow ?: continue
+            val searchBtn = findSearchButton(root)
+            if (searchBtn != null) {
+                searchBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                searchClicked = true
+                break
+            }
+            delay(300)
+        }
+
+        if (!searchClicked) {
+            Log.w(TAG, "Could not find Search button in share screen")
+            return false
+        }
+
+        delay(400)
+
+        var searchInput: AccessibilityNodeInfo? = null
+        for (i in 1..6) {
+            val root = rootInActiveWindow ?: continue
+            searchInput = findSearchInputNode(root)
+            if (searchInput != null) break
+            delay(300)
+        }
+
+        if (searchInput == null) {
+            Log.w(TAG, "Could not find Search input field in share screen")
+            return false
+        }
+
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, cleanName)
+        }
+        searchInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        delay(700)
+
+        // Find matching contact node and click it
+        for (attempt in 1..6) {
+            val root = rootInActiveWindow ?: continue
+            val contactNode = findFirstMatchingContactNode(root, cleanName)
+            if (contactNode != null) {
+                var clicked = contactNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (!clicked) {
+                    var parent = contactNode.parent
+                    while (parent != null) {
+                        if (parent.isClickable) {
+                            clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            break
+                        }
+                        parent = parent.parent
+                    }
+                }
+                if (!clicked) {
+                    val rect = Rect()
+                    contactNode.getBoundsInScreen(rect)
+                    if (rect.centerX() > 0) {
+                        clickAt(rect.centerX().toFloat(), rect.centerY().toFloat())
+                        clicked = true
+                    }
+                }
+                if (clicked) {
+                    Log.d(TAG, "Selected contact '$cleanName' in share screen!")
+                    return true
+                }
+            }
+            delay(350)
+        }
+
+        Log.w(TAG, "Contact '$cleanName' not found in share screen results")
+        return false
+    }
+
+    private fun findMediaForwardFab(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val ids = listOf(
+            "com.whatsapp:id/fab",
+            "com.whatsapp.w4b:id/fab",
+            "com.whatsapp:id/send",
+            "com.whatsapp.w4b:id/send",
+            "com.whatsapp:id/next_btn"
+        )
+        for (id in ids) {
+            val list = root.findAccessibilityNodeInfosByViewId(id)
+            if (!list.isNullOrEmpty() && list[0].isClickable) return list[0]
+        }
+        val nextWords = listOf("Next", "Send", "आगे", "भेजें")
+        for (word in nextWords) {
+            val list = root.findAccessibilityNodeInfosByText(word)
+            for (node in list) {
+                if (node.isClickable) return node
+            }
+        }
+        return null
+    }
+
+    private fun findCaptionEntryNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val ids = listOf(
+            "com.whatsapp:id/caption",
+            "com.whatsapp.w4b:id/caption",
+            "com.whatsapp:id/entry",
+            "com.whatsapp.w4b:id/entry"
+        )
+        for (id in ids) {
+            val list = root.findAccessibilityNodeInfosByViewId(id)
+            if (!list.isNullOrEmpty()) return list[0]
+        }
+        return findFirstEditText(root)
     }
 
     private suspend fun searchAndOpenContact(targetName: String): Boolean {
@@ -747,22 +1052,31 @@ class PostlyAccessibilityService : AccessibilityService() {
                     "AUDIO" -> "audio/*"
                     else -> "*/*"
                 }
+
+                try {
+                    grantUriPermission(targetPkg, mediaUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) {}
+
+                val fullPhone = if (cleanPhone.length == 10 && (cleanPhone.startsWith("6") || cleanPhone.startsWith("7") || cleanPhone.startsWith("8") || cleanPhone.startsWith("9"))) "91$cleanPhone" else cleanPhone
+
                 Intent(Intent.ACTION_SEND).apply {
                     setPackage(targetPkg)
                     type = mimeType
                     putExtra(Intent.EXTRA_STREAM, mediaUri)
+                    clipData = ClipData.newUri(contentResolver, "Attachment", mediaUri)
                     if (task.message.isNotBlank()) {
                         putExtra(Intent.EXTRA_TEXT, task.message)
                     }
-                    if (cleanPhone.isNotEmpty()) {
-                        putExtra("jid", "$cleanPhone@s.whatsapp.net")
+                    if (fullPhone.isNotEmpty()) {
+                        putExtra("jid", "$fullPhone@s.whatsapp.net")
                     }
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 }
             } else if (cleanPhone.isNotEmpty()) {
+                val fullPhone = if (cleanPhone.length == 10 && (cleanPhone.startsWith("6") || cleanPhone.startsWith("7") || cleanPhone.startsWith("8") || cleanPhone.startsWith("9"))) "91$cleanPhone" else cleanPhone
                 val encodedMsg = URLEncoder.encode(task.message, "UTF-8")
-                val uri = Uri.parse("whatsapp://send?phone=$cleanPhone&text=$encodedMsg")
+                val uri = Uri.parse("whatsapp://send?phone=$fullPhone&text=$encodedMsg")
                 Intent(Intent.ACTION_VIEW, uri).apply {
                     setPackage(targetPkg)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
