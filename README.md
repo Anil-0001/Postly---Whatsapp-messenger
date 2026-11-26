@@ -1,67 +1,50 @@
-# Postly - Smart Message Scheduler & Automator
+# Postly - Smart Message Scheduler & Automator 📱
 
-**Postly** is an Android message scheduling application inspired by SKEDit, built natively using **Kotlin**, **Jetpack Compose (Material 3)**, **Room Database**, and **Android AccessibilityService**.
+Postly is an open-source native Android message scheduling and automation application inspired by SKEDit, built using **Kotlin**, **Jetpack Compose (Material 3)**, **Room Database**, and **Android AccessibilityService**.
+
+> 📖 **Complete Documentation & Developer Guide:**  
+> For full architecture, workflow, current implementation details, device setups (OnePlus, Xiaomi/Redmi), and home setup instructions, please read **[PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)**.
 
 ---
 
 ## 🚀 Key Features
 
-1. **WhatsApp Message Scheduling (Fully Functional):**
-   - Direct contact and group scheduling.
-   - Text messages with variable support (e.g. `{name}`).
-   - Exact alarm scheduling using `AlarmManager.setExactAndAllowWhileIdle`.
-   - Native UI interaction via `PostlyAccessibilityService`:
-     - Launches WhatsApp to the target conversation.
-     - Inputs message content automatically.
-     - Simulates clicking the WhatsApp Send button.
-     - Logs delivery status and updates Room DB to "Done".
+1. **WhatsApp & Media Automation:**
+   - Text message scheduling with recipient phone or WhatsApp contact picker.
+   - Image, Video, Audio, and Document attachments from Gallery.
+   - Built-in image preview, edit (replace), and delete controls.
+   - Android `FileProvider` integration for secure WhatsApp media dispatch.
+   - Accessibility automation handles both direct Image Preview and Contact Picker forward screens.
 
-2. **Full UI Platform Options (Matching SKEDit FAB & Drawer):**
-   - WhatsApp (Working Engine)
-   - WhatsApp Business
-   - Telegram
-   - Messenger
-   - Instagram
-   - Email
-   - Call
+2. **Automated Screen Wakeup & PIN Unlock:**
+   - Physical screen wakeup from Doze/Sleep mode via WakeLock.
+   - Automated lockscreen swipe up and PIN entry.
+   - Calibrated for OnePlus Nord CE 2 Lite (OxygenOS 14, 1080x2412) with universal scaling for all Android devices.
 
-3. **Scheduler Dashboard & Management:**
-   - 5 Categorized Tabs: `Pending`, `Done`, `Deleted`, `Failed`, `Drafts`.
-   - Empty state illustration with quick action.
-   - Scheduled Cards with platform badge, date/time, and status checkmark.
-   - Context Actions: `Send Now`, `Delete`, `Clear Pending`.
+3. **Smart Timing & Network Auto-Retry:**
+   - Precise 30-second scheduling interval (`XX:XX:30`).
+   - Network availability check: optional auto-retry (1, 2, 3, 5, 10 mins with max 3 attempts) if offline.
+   - Retry is off by default unless configured.
 
-4. **Requirement Details Wizard:**
-   - Accessibility Service setup.
-   - Battery Optimization guide ("Don't optimize").
-   - Display Over Other Apps overlay toggle.
-   - Screen Lock bypass instructions.
-   - Delivery Notifications permissions.
-
-5. **Google Play Store Policy Compliant:**
-   - **Prominent In-App Disclosure Dialog** displayed on first launch.
-   - Official Accessibility Service description clearly stating purpose (no data harvesting, no keystroke tracking, local-only processing).
-   - Safe branding and disclaimers.
+4. **Play Store Compliant:**
+   - Prominent in-app disclosure dialog for Accessibility Service.
+   - Local-only data processing with zero telemetry or remote credential storage.
 
 ---
 
-## 📱 Pre-compiled APK Location
+## 🛠️ Quick Commands
 
-- **Ready-to-install APK:** `Postly.apk` (inside project root)
-- **Direct Path:** `app/build/outputs/apk/debug/app-debug.apk`
-
-### Quick Install via ADB:
+### Build Debug APK:
 ```bash
-adb install -r Postly.apk
+./gradlew assembleDebug
 ```
 
----
+### Install via ADB:
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
 
-## 🛠️ Tech Stack & Architecture
-
-- **Language:** Kotlin 1.9.22
-- **UI Framework:** Jetpack Compose + Material 3 (Material Icons Extended)
-- **Architecture:** MVVM + Clean Service Architecture
-- **Database:** AndroidX Room Database 2.6.1 (SQLite)
-- **Background Tasks:** Android Exact AlarmManager + Foreground Service + WakeLock
-- **Automation Core:** Android AccessibilityService
+### Live Logcat Stream:
+```bash
+adb logcat -s PostlyAccessService:D DispatchFGService:D AlarmReceiver:D
+```
