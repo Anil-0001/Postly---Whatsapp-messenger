@@ -29,6 +29,7 @@ class DispatchForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        activeServiceInstance = this
         val scheduleId = intent?.getLongExtra(AlarmReceiver.EXTRA_SCHEDULE_ID, -1L) ?: -1L
         if (scheduleId == -1L) {
             stopSelf()
@@ -195,8 +196,26 @@ class DispatchForegroundService : Service() {
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        releaseWakeLock()
+        activeServiceInstance = null
+    }
+
     companion object {
         private const val NOTIFICATION_ID = 2001
         private const val TAG = "DispatchFGService"
+        var activeServiceInstance: DispatchForegroundService? = null
+
+        fun finishAndRelease() {
+            try {
+                activeServiceInstance?.let { service ->
+                    service.releaseWakeLock()
+                    service.stopSelf()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in finishAndRelease", e)
+            }
+        }
     }
 }

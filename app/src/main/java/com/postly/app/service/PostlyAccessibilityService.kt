@@ -443,8 +443,7 @@ class PostlyAccessibilityService : AccessibilityService() {
                 pendingTask = null
                 Log.d(TAG, "Step 8: WhatsApp message successfully sent! Task marked DONE.")
 
-                delay(1500)
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                returnHomeAndLockScreen()
             } catch (e: Exception) {
                 Log.e(TAG, "Error in WhatsApp automation", e)
                 RetryManager.handleFailure(applicationContext, task, "Automation error: ${e.message ?: "Unknown"}")
@@ -578,8 +577,7 @@ class PostlyAccessibilityService : AccessibilityService() {
                 pendingTask = null
                 Log.d(TAG, "WhatsApp media message successfully sent! Task marked DONE.")
 
-                delay(1500)
-                performGlobalAction(GLOBAL_ACTION_BACK)
+                returnHomeAndLockScreen()
             } catch (e: Exception) {
                 Log.e(TAG, "Error in WhatsApp media automation", e)
                 RetryManager.handleFailure(applicationContext, task, "Media automation error: ${e.message ?: "Unknown"}")
@@ -587,6 +585,28 @@ class PostlyAccessibilityService : AccessibilityService() {
             } finally {
                 isExecutingAutomation = false
             }
+        }
+    }
+
+    /**
+     * Completes dispatch by returning to Home Screen and turning the screen off / locking device
+     */
+    private suspend fun returnHomeAndLockScreen() {
+        try {
+            delay(1500) // Allow WhatsApp message sending animation and network tick to complete
+            Log.d(TAG, "Releasing DispatchForegroundService and WakeLock...")
+            DispatchForegroundService.finishAndRelease()
+
+            Log.d(TAG, "Navigating to Home screen...")
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            delay(800) // Allow smooth home launcher transition
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Log.d(TAG, "Locking screen and turning display OFF...")
+                performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in returnHomeAndLockScreen", e)
         }
     }
 
